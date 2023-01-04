@@ -162,12 +162,28 @@ DRMInterface::DRMInterface(const char* device)
 	device_id = i915_getparam(fd, I915_PARAM_CHIPSET_ID);
 	device_revision = i915_getparam(fd, I915_PARAM_REVISION);
 
-	dev_desc = lookup_device_id(device_id);
-	if (!dev_desc)
+	/* Query device GPGPU EU configuration */
+	auto eu_total = i915_getparam(fd, I915_PARAM_EU_TOTAL);
+	auto subslice_total = i915_getparam(fd, I915_PARAM_SUBSLICE_TOTAL);
+	unsigned int slice_mask = i915_getparam(fd, I915_PARAM_SLICE_MASK);
+
+	slice_cnt = 0;
+	while (slice_mask > 0)
 	{
-		close(fd);
-		throw runtime_error("Unknown device id");
+		slice_cnt++;
+
+		do {
+			slice_mask >>= 1;
+		}
+		while (slice_mask > 0 && (slice_mask & 0x1) == 0);
 	}
+
+	/* Round up to account for reserved EUs */
+	subslice_cnt = (subslice_total + slice_cnt-1) / slice_cnt;
+	eu_cnt = (eu_total + subslice_total-1) / subslice_total;
+
+
+	dev_desc = lookup_device_id(device_id, device_revision, get_hw_config());
 
 	/* We only support cpu-cache coherent write-combining mmap topologies by
 	 * now (i.e. newer ingrated graphics). */
@@ -227,9 +243,21 @@ int DRMInterface::get_device_revision() const
 	return device_revision;
 }
 
+uint64_t DRMInterface::get_hw_config() const
+{
+	return ((uint64_t) slice_cnt << 32) |
+		((uint64_t) subslice_cnt << 16) |
+		((uint64_t) eu_cnt);
+}
+
 const char* DRMInterface::get_device_name() const
 {
-	return dev_desc->name;
+	return dev_desc.name;
+}
+
+NEO::HardwareInfo DRMInterface::get_hw_info() const
+{
+	return dev_desc.hw_info;
 }
 
 

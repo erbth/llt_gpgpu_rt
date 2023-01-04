@@ -28,7 +28,14 @@ protected:
 	/* Information about the device */
 	int device_id;
 	int device_revision;
-	const DeviceDescription* dev_desc = nullptr;
+
+	/* Assuming a homogoenous architecture (which is not true for all devices,
+	 * on some one EU might be reserved) */
+	int slice_cnt = 0;
+	int subslice_cnt = 0;
+	int eu_cnt = 0;
+
+	DeviceDescription dev_desc{};
 
 public:
 	DRMInterface(const char* device);
@@ -48,7 +55,9 @@ public:
 
 	int get_device_id() const;
 	int get_device_revision() const;
+	uint64_t get_hw_config() const;
 	const char* get_device_name() const;
+	NEO::HardwareInfo get_hw_info() const;
 
 
 	DRMBuffer create_buffer(uint64_t size);

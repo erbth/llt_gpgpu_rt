@@ -7,14 +7,6 @@
 
 #include "third_party/helpers/hw_info.h"
 
-#include "shared/source/command_stream/linear_stream.h"
-#include "shared/source/debug_settings/debug_settings_manager.h"
-#include "third_party/helpers/hw_helper.h"
-
-#include "hw_cmds.h"
-
-#include <algorithm>
-
 namespace NEO {
 void setHwInfoValuesFromConfig(const uint64_t hwInfoConfig, HardwareInfo &hwInfoIn) {
     uint32_t sliceCount = static_cast<uint16_t>(hwInfoConfig >> 32);

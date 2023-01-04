@@ -7,6 +7,7 @@
 
 #pragma once
 #include "hw_info_gen9.h"
+#include "hw_cmds_cfl.h"
 
 namespace NEO {
 

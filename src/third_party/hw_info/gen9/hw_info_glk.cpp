@@ -5,10 +5,7 @@
  *
  */
 
-#include "shared/source/aub_mem_dump/definitions/aub_services.h"
-#include "third_party/helpers/constants.h"
-
-#include "engine_node.h"
+#include "hw_info_glk.h"
 
 namespace NEO {
 
@@ -37,9 +34,6 @@ const RuntimeCapabilityTable GLK::capabilityTable{
     30,                                            // clVersionSupport
     64,                                            // slmSize
 };
-
-WorkaroundTable GLK::workaroundTable = {};
-FeatureTable GLK::featureTable = {};
 
 void GLK::setupFeatureAndWorkaroundTable(HardwareInfo *hwInfo) {
     FeatureTable *featureTable = &hwInfo->featureTable;
@@ -76,14 +70,12 @@ void GLK::setupFeatureAndWorkaroundTable(HardwareInfo *hwInfo) {
 }
 
 const HardwareInfo GLK_1x3x6::hwInfo = {
-    &GLK::platform,
-    &GLK::featureTable,
-    &GLK::workaroundTable,
-    &GLK_1x3x6::gtSystemInfo,
+    GLK::platform,
+    FeatureTable(),
+    WorkaroundTable(),
+    GT_SYSTEM_INFO(),
     GLK::capabilityTable,
 };
-
-GT_SYSTEM_INFO GLK_1x3x6::gtSystemInfo = {0};
 void GLK_1x3x6::setupHardwareInfo(HardwareInfo *hwInfo, bool setupFeatureTableAndWorkaroundTable) {
     GT_SYSTEM_INFO *gtSysInfo = &hwInfo->gtSystemInfo;
     gtSysInfo->ThreadCount = gtSysInfo->EUCount * GLK::threadsPerEu;
@@ -108,13 +100,12 @@ void GLK_1x3x6::setupHardwareInfo(HardwareInfo *hwInfo, bool setupFeatureTableAn
 };
 
 const HardwareInfo GLK_1x2x6::hwInfo = {
-    &GLK::platform,
-    &GLK::featureTable,
-    &GLK::workaroundTable,
-    &GLK_1x2x6::gtSystemInfo,
+    GLK::platform,
+    FeatureTable(),
+    WorkaroundTable(),
+    GT_SYSTEM_INFO(),
     GLK::capabilityTable,
 };
-GT_SYSTEM_INFO GLK_1x2x6::gtSystemInfo = {0};
 void GLK_1x2x6::setupHardwareInfo(HardwareInfo *hwInfo, bool setupFeatureTableAndWorkaroundTable) {
     GT_SYSTEM_INFO *gtSysInfo = &hwInfo->gtSystemInfo;
     gtSysInfo->ThreadCount = gtSysInfo->EUCount * GLK::threadsPerEu;
@@ -140,19 +131,4 @@ void GLK_1x2x6::setupHardwareInfo(HardwareInfo *hwInfo, bool setupFeatureTableAn
 
 const HardwareInfo GLK::hwInfo = GLK_1x3x6::hwInfo;
 const uint64_t GLK::defaultHardwareInfoConfig = 0x100030006;
-
-void setupGLKHardwareInfoImpl(HardwareInfo *hwInfo, bool setupFeatureTableAndWorkaroundTable, uint64_t hwInfoConfig) {
-    if (hwInfoConfig == 0x100020006) {
-        GLK_1x2x6::setupHardwareInfo(hwInfo, setupFeatureTableAndWorkaroundTable);
-    } else if (hwInfoConfig == 0x100030006) {
-        GLK_1x3x6::setupHardwareInfo(hwInfo, setupFeatureTableAndWorkaroundTable);
-    } else if (hwInfoConfig == 0x0) {
-        // Default config
-        GLK_1x3x6::setupHardwareInfo(hwInfo, setupFeatureTableAndWorkaroundTable);
-    } else {
-        UNRECOVERABLE_IF(true);
-    }
-}
-
-void (*GLK::setupHardwareInfo)(HardwareInfo *, bool, uint64_t) = setupGLKHardwareInfoImpl;
 } // namespace NEO

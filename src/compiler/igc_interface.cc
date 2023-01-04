@@ -6,19 +6,93 @@
  * References:
  *   * intel-compute-runtime: https://github.com/intel/compute-runtime
  */
+#include <cstdio>
+#include <cstring>
 #include <vector>
-#include <string>
+#include <new>
 #include <stdexcept>
 
 extern "C" {
 #include <dlfcn.h>
 }
 
-#include <igc.opencl.h>
-
 #include "igc_interface.h"
 
+#include <igc.opencl.h>
+#include <ocl_igc_interface/platform_helper.h>
+
 using namespace std;
+
+
+IGCInterface::IntermediateRepresentation::IntermediateRepresentation(
+		CIF::RAII::UPtr_t<IGC::OclTranslationOutputTagOCL>&& data,
+		IGC::CodeType::CodeType_t code_type)
+	:
+		data(move(data)), code_type(code_type)
+{
+	data_ptr = nullptr;
+	data_size = 0;
+
+	if (this->data && this->data->GetOutput() &&
+			this->data->GetOutput()->GetSizeRaw() > 0 &&
+			this->data->GetOutput()->GetMemory<char>())
+	{
+		data_ptr = this->data->GetOutput()->GetMemory<char>();
+		data_size = this->data->GetOutput()->GetSize<char>();
+	}
+}
+
+IGC::OclTranslationOutputTagOCL* IGCInterface::IntermediateRepresentation::get_output()
+{
+	return data.get();
+}
+
+size_t IGCInterface::IntermediateRepresentation::get_data_size() const
+{
+	return data_size;
+}
+
+const char* IGCInterface::IntermediateRepresentation::get_data_ptr() const
+{
+	return data_ptr;
+}
+
+
+IGCInterface::Binary::Binary(const char* _bin, size_t bin_size,
+		const char* _debug, size_t debug_size)
+	:
+		bin_size(bin_size), debug_size(debug_size)
+{
+	bin = (char*) malloc(bin_size);
+	if (!bin)
+		throw bad_alloc();
+
+	debug = (char*) malloc(debug_size);
+	if (!debug)
+	{
+		free(bin);
+		throw bad_alloc();
+	}
+
+	memcpy(bin, _bin, bin_size);
+	memcpy(debug, _debug, debug_size);
+}
+
+IGCInterface::Binary::~Binary()
+{
+	free(debug);
+	free(bin);
+}
+
+const char* IGCInterface::Binary::get_bin() const
+{
+	return bin;
+}
+
+const char* IGCInterface::Binary::get_debug() const
+{
+	return debug;
+}
 
 
 IGCInterface::DLLibrary::DLLibrary(const char* name)
@@ -36,8 +110,10 @@ IGCInterface::DLLibrary::~DLLibrary()
 
 /* Adapted from intel-compute-runtime -
  * shared/offline_compiler/source/offline_compiler.cpp ::initialize */
-IGCInterface::IGCInterface()
-	: fcl_library(FCL_LIBRARY_NAME), igc_library(IGC_LIBRARY_NAME)
+IGCInterface::IGCInterface(const NEO::HardwareInfo& hw_info)
+	:
+		fcl_library(FCL_LIBRARY_NAME), igc_library(IGC_LIBRARY_NAME),
+		hw_info(hw_info)
 {
 	/* Initialize FCL */
 	auto fcl_create_main = (CIF::CreateCIFMainFunc_t) dlsym(
@@ -65,12 +141,19 @@ IGCInterface::IGCInterface()
 	fcl_device_ctx->SetOclApiVersion(120);
 	preferred_ir = fcl_device_ctx->GetPreferredIntermediateRepresentation();
 
-	/* intel-compute-runtime sets platform-specific information here if
-	 * GetUnderlyingVersion() returns > 4u. The latter does not in our case; but
-	 * it is not clear if that platform specific information is optional, hence
-	 * ensure that GetUnderlyingVersion() is <= 4u for now. */
 	if (fcl_device_ctx->GetUnderlyingVersion() > 4u)
-		throw runtime_error("FCL is too new");
+	{
+#if 0
+		auto fcl_platform = fcl_device_ctx->GetPlatformHandle();
+		if (!fcl_platform)
+			throw runtime_error("Failed to set platform for FCL");
+
+		IGC::PlatformHelper::PopulateInterfaceWith(
+				fcl_platform, (const HardwareInfo&) hw_info.platform);
+#else
+		throw runtime_error("FCL too new");
+#endif
+	}
 
 
 	/* Initialize IGC */
@@ -113,12 +196,12 @@ IGCInterface::IGCInterface()
 		throw runtime_error("IGC: Failed to get handle for device configuration");
 
 	IGC::PlatformHelper::PopulateInterfaceWith(*platform, hw_info.platform);
-	IGC::GtSysInfoHelper::PopulateInterfaceWith(*gt_system_info, hwinfo.gtSystemInfo);
+	IGC::GtSysInfoHelper::PopulateInterfaceWith(*gt_system_info, hw_info.gtSystemInfo);
 
 	/* Set features */
 	ftr_wa->SetFtrDesktop(hw_info.featureTable.flags.ftrDesktop);
 	ftr_wa->SetFtrChannelSwizzlingXOREnabled(hw_info.featureTable.flags.ftrChannelSwizzlingXOREnabled);
-	ftr_wa->SetFtrIVBMOM1Platform(hw_info.featureTable.flags.ftrIVBMOM1Platform);
+	ftr_wa->SetFtrIVBM0M1Platform(hw_info.featureTable.flags.ftrIVBM0M1Platform);
 	ftr_wa->SetFtrSGTPVSKUStrapPresent(hw_info.featureTable.flags.ftrSGTPVSKUStrapPresent);
 	ftr_wa->SetFtr5Slice(hw_info.featureTable.flags.ftr5Slice);
 
@@ -136,4 +219,169 @@ IGCInterface::IGCInterface()
 
 IGCInterface::~IGCInterface()
 {
+}
+
+
+std::string IGCInterface::get_internal_options()
+{
+	string options;
+
+	if (hw_info.capabilityTable.clVersionSupport >= 30)
+		options += "-ocl-version=300 ";
+	else if (hw_info.capabilityTable.clVersionSupport >= 21)
+		options += "-ocl-version=210 ";
+	else
+		options += "-ocl-version=120 ";
+
+	return options;
+}
+
+/* Adapted from intel-compute-runtime -
+ * shared/offline_compiler/source/offline_compiler.cpp ::buildIrBinary and functions
+ * called by it */
+unique_ptr<IGCInterface::IntermediateRepresentation> IGCInterface::build_ir(
+		const string& src,
+		CIF::Builtins::BufferLatest* options,
+		CIF::Builtins::BufferLatest* internal_options)
+{
+	auto err = CIF::Builtins::CreateConstBuffer(fcl_main.get(), nullptr, 0);
+	auto translation_ctx = fcl_device_ctx->CreateTranslationCtx(
+			IGC::CodeType::oclC,
+			preferred_ir,
+			err.get());
+
+	if (err->GetMemory<char>())
+	{
+		throw runtime_error("Failed to create FCL translation ctx: " +
+				string(err->GetMemory<char>(), err->GetSize<char>()));
+	}
+
+	if (!translation_ctx.get())
+		throw runtime_error("Failed to create FCL translation ctx");
+
+	/* Create buffers */
+	/* Not sure why +1 is required here, Intel code has it and without it the
+	 * last character is missing in the .cl file dumped with
+	 * IGC_ShaderDumpEnable=1 and if it is relevant compilitation fails (e.g. if
+	 * it is the closing } of a kernel function). It is not required for e.g.
+	 * the options, though (when present it introduces a NUL byte in the dumped
+	 * options file). I guess this comes from wrong length calculation inside
+	 * IGC, however the extra NUL should not cause OOB reads (as it is backed by
+	 * real memory from the string); and valgrind does not show any errors from
+	 * related code. In the .cl file dump there is always a NUL at the end, even
+	 * without this +1 maybe this backs the theory of incorrect length
+	 * calculation. */
+	auto src_buf = CIF::Builtins::CreateConstBuffer(fcl_main.get(),
+			src.c_str(), src.size() + 1);
+
+	if (!src_buf)
+		throw runtime_error("Failed to allocate buffer for source code");
+
+	auto output = translation_ctx->Translate(
+			src_buf.get(),
+			options,
+			internal_options,
+			nullptr,
+			0);
+
+	if (
+			output == nullptr ||
+			output->GetBuildLog() == nullptr ||
+			output->GetOutput() == nullptr)
+	{
+		throw runtime_error("Failed to translate source code to IR");
+	}
+
+	if (output->GetBuildLog()->GetSizeRaw() > 0 &&
+			output->GetBuildLog()->GetMemory<char>())
+	{
+		build_log += string(output->GetBuildLog()->GetMemory<char>(),
+				output->GetBuildLog()->GetSize<char>());
+	}
+
+	if (!output->Successful())
+		return nullptr;
+
+	return make_unique<IntermediateRepresentation>(move(output), preferred_ir);
+}
+
+/* Adapted from intel-compute-runtime -
+ * shared/offline_compiler/source/offline_compiler.cpp ::build and functions
+ * called by it */
+unique_ptr<IGCInterface::Binary> IGCInterface::build(
+		const string& src, const string& options)
+{
+	build_log.clear();
+
+	auto options_buf = CIF::Builtins::CreateConstBuffer(fcl_main.get(),
+			options.c_str(), options.size());
+
+	if (!options_buf)
+		throw runtime_error("Failed to create buffer for options");
+
+	string internal_options = get_internal_options();
+	auto internal_options_buf = CIF::Builtins::CreateConstBuffer(fcl_main.get(),
+			internal_options.c_str(), internal_options.size());
+
+	if (!internal_options_buf)
+		throw runtime_error("Failed to create buffer for options");
+
+	/* Build intermediate representation */
+	auto ir = build_ir(src, options_buf.get(), internal_options_buf.get());
+	if (!ir)
+		return nullptr;
+
+	/* Translate to machine code */
+	auto translation_ctx = igc_device_ctx->CreateTranslationCtx(
+			ir->code_type, IGC::CodeType::oclGenBin);
+
+	if (!translation_ctx)
+		throw runtime_error("Failed to create IGC translation ctx");
+
+	auto output = translation_ctx->Translate(
+			ir->get_output()->GetOutput(),
+			options_buf.get(),
+			internal_options_buf.get(), 
+			nullptr,
+			0);
+
+	if (output == nullptr ||
+			output->GetBuildLog() == nullptr ||
+			output->GetOutput() == nullptr)
+	{
+		throw runtime_error("Failed to translate IR to binary");
+	}
+
+	if (output->GetBuildLog()->GetSizeRaw() > 0 &&
+			output->GetBuildLog()->GetMemory<char>())
+	{
+		build_log += string(output->GetBuildLog()->GetMemory<char>(),
+				output->GetBuildLog()->GetSize<char>());
+	}
+
+	const char* bin_data = nullptr;
+	size_t bin_data_size = 0;
+	if (output->GetOutput()->GetSizeRaw() > 0 && output->GetOutput()->GetMemory<char>())
+	{
+		bin_data = output->GetOutput()->GetMemory<char>();
+		bin_data_size = output->GetOutput()->GetSize<char>();
+	}
+
+	const char* debug_data = nullptr;
+	size_t debug_data_size = 0;
+	if (output->GetDebugData() && output->GetDebugData()->GetSizeRaw() > 0 &&
+			output->GetDebugData()->GetMemory<char>())
+	{
+		debug_data = output->GetDebugData()->GetMemory<char>();
+		debug_data_size = output->GetDebugData()->GetSize<char>();
+	}
+
+	return make_unique<Binary>(
+			bin_data, bin_data_size,
+			debug_data, debug_data_size);
+}
+
+string IGCInterface::get_build_log() const
+{
+	return build_log;
 }
