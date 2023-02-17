@@ -11,6 +11,9 @@ add_executable(gpu_issue_test
 	device_registry.cc
 	compiler/igc_interface.cc
 	kernel.cc
+	hw_cmds.cc
+	hash.cc
+	utility.cc
 	${THIRD_PARTY_HWINFO_SRCS}
 )
 

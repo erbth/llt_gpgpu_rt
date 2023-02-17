@@ -2,6 +2,11 @@ cmake_minimum_required(VERSION 3.13)
 
 project(i915_bare_gpu CXX)
 
+# Require GCC
+if (NOT "${CMAKE_CXX_COMPILER_ID}" STREQUAL "GNU")
+	message(FATAL_ERROR "Compiler is ${CMAKE_CXX_COMPILER_ID}, currently only GCC is supported (s.t. e.g. type puning through unions works safely)")
+endif()
+
 set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -std=gnu++17 -gdwarf-2 -O3 -Wall")
 
 # Find required packages

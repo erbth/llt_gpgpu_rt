@@ -5,6 +5,7 @@
 #include <vector>
 #include <memory>
 #include <string>
+#include <optional>
 
 class Kernel
 {
@@ -179,9 +180,16 @@ public:
 			std::string type_qualifiers;
 		};
 		std::vector<KernelArgumentInfo> kernel_argument_infos;
+
+		struct AllocateLocalSurface
+		{
+			uint32_t offset = 0;
+			uint32_t total_inline_local_memory_size = 0;
+		};
+		std::optional<AllocateLocalSurface> allocate_local_surface;
 	};
 
-protected:
+public:
 	const std::string name;
 	const Parameters params;
 

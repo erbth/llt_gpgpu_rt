@@ -222,7 +222,47 @@ IGCInterface::~IGCInterface()
 }
 
 
-std::string IGCInterface::get_internal_options()
+vector<string> IGCInterface::get_supported_extensions()
+{
+	vector<string> exts;
+
+	/* Adapted from intel-compute-runtime,
+	 * shared/source/compiler_interface/oclc_extensions.cpp */
+	exts.push_back("cl_khr_byte_addressable_store");
+	exts.push_back("cl_khr_fp16");
+	exts.push_back("cl_khr_global_int32_base_atomics");
+	exts.push_back("cl_khr_global_int32_extended_atomics");
+	exts.push_back("cl_khr_icd");
+	exts.push_back("cl_khr_local_int32_base_atomics");
+	exts.push_back("cl_khr_local_int32_extended_atomics");
+	exts.push_back("cl_intel_command_queue_families");
+	exts.push_back("cl_intel_subgroups");
+	exts.push_back("cl_intel_required_subgroup_size");
+	exts.push_back("cl_intel_subgroups_short");
+	exts.push_back("cl_khr_spir");
+	exts.push_back("cl_intel_accelerator");
+	exts.push_back("cl_intel_driver_diagnostics");
+	exts.push_back("cl_khr_priority_hints");
+	exts.push_back("cl_khr_throttle_hints");
+	exts.push_back("cl_khr_create_command_queue");
+	exts.push_back("cl_intel_subgroups_char");
+	exts.push_back("cl_intel_subgroups_long");
+	exts.push_back("cl_khr_il_program");
+	exts.push_back("cl_intel_mem_force_host_memory");
+	exts.push_back("cl_khr_subgroup_extended_types");
+	exts.push_back("cl_khr_subgroup_non_uniform_vote");
+	exts.push_back("cl_khr_subgroup_ballot");
+	exts.push_back("cl_khr_subgroup_non_uniform_arithmetic");
+	exts.push_back("cl_khr_subgroup_shuffle");
+	exts.push_back("cl_khr_subgroup_shuffle_relative");
+	exts.push_back("cl_khr_subgroup_clustered_reduce");
+	exts.push_back("cl_intel_device_attribute_query");
+	exts.push_back("cl_khr_suggested_local_work_size");
+
+	return exts;
+}
+
+string IGCInterface::get_internal_options()
 {
 	string options;
 
@@ -232,6 +272,18 @@ std::string IGCInterface::get_internal_options()
 		options += "-ocl-version=210 ";
 	else
 		options += "-ocl-version=120 ";
+
+	/* Add supported extensions */
+	options += "-cl-ext=-all";
+
+	for (auto& ext : get_supported_extensions())
+		options += ",+" + ext;
+
+	options += " ";
+
+	/* E.g. GLK does not support independent subgroup forward progress; not sure
+	 * if that is important; just tell the compiler to be on the safe side */
+	options += "-cl-no-subgroup-ifp ";
 
 	return options;
 }

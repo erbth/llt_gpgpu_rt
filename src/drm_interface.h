@@ -1,3 +1,4 @@
+/** Heavily inspired by OpenCL */
 #ifndef __DRM_INTERFACE_H
 #define __DRM_INTERFACE_H
 
@@ -12,7 +13,18 @@ extern "C" {
 }
 
 #include "device_registry.h"
+#include "kernel.h"
 
+
+/* Yep, this name is taken from OpenCL */
+struct NDRange final
+{
+	const uint32_t x;
+	const uint32_t y;
+	const uint32_t z;
+
+	NDRange(uint32_t x, uint32_t y = 1, uint32_t z = 1);
+};
 
 class DRMBuffer;
 
@@ -24,6 +36,7 @@ protected:
 	char driver_name[32];
 
 	int fd = -1;
+	uint32_t ctx_id = 0;
 
 	/* Information about the device */
 	int device_id;
@@ -60,7 +73,13 @@ public:
 	NEO::HardwareInfo get_hw_info() const;
 
 
+	/* Size will be rounded up to 4k pages */
 	DRMBuffer create_buffer(uint64_t size);
+
+	void exec_kernel(
+			const Kernel& kernel,
+			const NDRange& global_size,
+			const NDRange& local_size);
 };
 
 /* Buffers created by a DRMInterface are only valid as long as the DRMInterface
@@ -88,6 +107,9 @@ public:
 	DRMBuffer& operator=(DRMBuffer&&) = delete;
 
 	virtual ~DRMBuffer();
+
+	uint64_t get_size() const;
+	uint32_t get_handle() const;
 
 	void* map();
 	void unmap();

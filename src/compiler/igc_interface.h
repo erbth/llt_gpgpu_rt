@@ -93,6 +93,7 @@ protected:
 	CIF::RAII::UPtr_t<CIF::CIFMain> igc_main = nullptr;
 	CIF::RAII::UPtr_t<IGC::IgcOclDeviceCtxTagOCL> igc_device_ctx = nullptr;
 
+	std::vector<std::string> get_supported_extensions();
 	std::string get_internal_options();
 	std::unique_ptr<IntermediateRepresentation> build_ir(
 			const std::string& src,

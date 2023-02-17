@@ -11,14 +11,9 @@
 using namespace std;
 
 
-#define MI_BATCH_BUFFER_END (0xA << 23)
-
-
 const char* kernel_src = R"KERNEL(
-__kernel void test_kernel(uint val, __global uint* restrict dst, uint size)
+__kernel void test_kernel()
 {
-	if (get_global_id(0) < size)
-		dst[get_global_id(0)] = val;
 }
 )KERNEL";
 
@@ -64,17 +59,7 @@ void main_exec_save()
 		printf("Build log:\n%s\n", build_log.c_str());
 
 	auto k = Kernel::read_kernel(kernel_bin->get_bin(), kernel_bin->bin_size, "test_kernel");
-
-
-
-
-	auto buf = drm.create_buffer(8192);
-	auto addr = buf.map();
-
-	const uint32_t bbe = MI_BATCH_BUFFER_END;
-	memcpy(addr, &bbe, sizeof(bbe));
-
-	buf.unmap();
+	drm.exec_kernel(*k, NDRange(32), NDRange(32));
 }
 
 int main(int argc, char** argv)

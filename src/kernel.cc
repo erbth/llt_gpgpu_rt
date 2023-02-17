@@ -3,7 +3,9 @@
 #include <cstring>
 #include <new>
 #include <stdexcept>
+#include "ensure_types.h"
 #include "kernel.h"
+#include "hash.h"
 
 #include <igfxfmid.h>
 #include <ocl_igc_shared/executable_format/patch_list.h>
@@ -134,17 +136,6 @@ string to_string(const iOpenCL::SKernelBinaryHeaderGen9& hdr)
 }
 
 /* Parsing binary kernel headers */
-/* Ensure type sizes are as expected */
-static_assert(sizeof(uint8_t) == 1);
-static_assert(sizeof(uint16_t) == 2);
-static_assert(sizeof(uint32_t) == 4);
-static_assert(sizeof(uint64_t) == 8);
-
-static_assert(sizeof(int8_t) == 1);
-static_assert(sizeof(int16_t) == 2);
-static_assert(sizeof(int32_t) == 4);
-static_assert(sizeof(int64_t) == 8);
-
 template<typename T>
 T read_binary(const char*& bin)
 {
@@ -463,6 +454,20 @@ void read_kernel_patchlist(
 			}
 			break;
 
+		case iOpenCL::PATCH_TOKEN_ALLOCATE_LOCAL_SURFACE:
+			{
+				static_assert(sizeof(iOpenCL::SPatchAllocateLocalSurface) == 8 + 2*4);
+				if (item_size != 8 + 2*4 || params.allocate_local_surface)
+					throw invalid_argument("Failed to read patch item AllocateLocalSurface");
+
+				Kernel::Parameters::AllocateLocalSurface a;
+				a.offset = read_binary<uint32_t>(bin);
+				a.total_inline_local_memory_size = read_binary<uint32_t>(bin);
+
+				params.allocate_local_surface = a;
+			}
+			break;
+
 		default:
 			throw invalid_argument("Unknown patch item with token \"" +
 					to_string(token) + "\" and of size " + to_string(item_size) + ".");
@@ -497,6 +502,8 @@ unique_ptr<Kernel> Kernel::read_kernel(const char* bin, size_t size, const strin
 		case IGFX_GEN9_CORE:
 			{
 				auto kernel_hdr = read_kernel_binary_header_gen9(bin, size);
+				auto kernel_data_start = bin;
+
 				auto kernel_name = read_kernel_name(bin, size, kernel_hdr);
 
 				/* Read heaps */
@@ -538,11 +545,14 @@ unique_ptr<Kernel> Kernel::read_kernel(const char* bin, size_t size, const strin
 
 				size -= heaps_size;
 
-				/* TODO: do something with checksum */
-
 				/* Read patchlist */
 				auto params = build_kernel_params(hdr, kernel_hdr);
 				read_kernel_patchlist(bin, size, kernel_hdr, params);
+
+				/* Verify checksum */
+				auto checksum = gen_hash(kernel_data_start, bin - kernel_data_start) & 0xffffffff;
+				if (kernel_hdr.CheckSum != checksum)
+					throw invalid_argument("Kernel checksum mismatch for kernel `" + kernel_name + "'");
 
 				/* Construct kernel */
 				if (kernel_name == name)
