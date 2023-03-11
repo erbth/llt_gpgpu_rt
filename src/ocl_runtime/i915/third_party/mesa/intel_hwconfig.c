@@ -19,24 +19,21 @@
  * LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING
  * FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS
  * IN THE SOFTWARE.
+ *
+ * Adapted by Thomas Erbesdobler in 2023 for inclusion into i915_bare_gpu; for
+ * changes see version control.
  */
 
 #include <stdio.h>
 #include <stdlib.h>
+#include <assert.h>
 
-#include "drm-uapi/i915_drm.h"
+#include "../drm-uapi/i915_drm.h"
 #include "intel_device_info.h"
 #include "intel_hwconfig.h"
 #include "intel_hwconfig_types.h"
-#include "intel/common/intel_gem.h"
 
-#include "util/log.h"
-
-#ifdef NDEBUG
-#define DEBUG_BUILD false
-#else
-#define DEBUG_BUILD true
-#endif
+#include "intel_utils.h"
 
 struct hwconfig {
    uint32_t key;
@@ -153,20 +150,11 @@ intel_process_hwconfig_table(struct intel_device_info *devinfo,
 }
 
 /* If devinfo->apply_hwconfig is true, then we apply the hwconfig value.
- *
- * For debug builds, if devinfo->apply_hwconfig is false, we will compare the
- * hwconfig value with the current value in the devinfo and log a warning
- * message if they differ. This should help to make sure the values in our
- * devinfo structures match what hwconfig is specified.
  */
 #define DEVINFO_HWCONFIG(F, V)                                          \
    do {                                                                 \
       if (devinfo->apply_hwconfig)                                      \
          devinfo->F = V;                                                \
-      else if (DEBUG_BUILD && devinfo->F != (V))                        \
-         mesa_logw("%s (%u) != devinfo->%s (%u)",                       \
-                   key_to_name(item->key), (V), #F,                     \
-                   devinfo->F);                                         \
    } while (0)
 
 static void
@@ -320,3 +308,5 @@ intel_get_and_print_hwconfig_table(int fd)
       free(hwconfig);
    }
 }
+
+// vim: expandtab ts=3 sw=3

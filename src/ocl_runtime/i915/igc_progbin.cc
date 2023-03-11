@@ -1,29 +1,31 @@
-#include <cstdio>
-#include <cstdlib>
+/** See also:
+ *    * igt-gpu-tools*, especially tests/i915/gem_exec_nop.c
+ *    * https://bwidawsk.net/blog/2013/8/i915-command-submission-via-gem_exec_nop/
+ *    * https://bwidawsk.net/blog/2013/1/i915-hardware-contexts-and-some-bits-about-batchbuffers/
+ *    * https://blog.ffwll.ch/2013/01/i915gem-crashcourse-overview.html
+ *    * Mesa's codebase
+ *
+ * References:
+ *   * igt-gpu-tools: https://gitlab.freedesktop.org/drm/igt-gpu-tools
+ */
 #include <cstring>
-#include <new>
 #include <stdexcept>
+#include "igc_progbin.h"
 #include "ensure_types.h"
-#include "kernel.h"
-#include "hash.h"
-
-#include <igfxfmid.h>
-#include <ocl_igc_shared/executable_format/patch_list.h>
-#include <ocl_igc_shared/executable_format/patch_g7.h>
-#include <ocl_igc_shared/executable_format/patch_g75.h>
-#include <ocl_igc_shared/executable_format/patch_g8.h>
-#include <ocl_igc_shared/executable_format/patch_g9.h>
+#include "macros.h"
 
 using namespace std;
 
-#define ARRAYSIZE(X) (sizeof(X) / sizeof(*X))
-
+namespace OCL {
 
 /* The unpadded/padded size division approach from intel-compute-runtime -
  * shared/offline_compiler/source/decoder/binary_decoder.cpp */
-Kernel::Heap::Heap(const char* bin, size_t unpadded_size, size_t size)
+Heap::Heap(const char* bin, size_t unpadded_size, size_t size)
 	: unpadded_size(unpadded_size), size(size)
 {
+	if (unpadded_size > size)
+		throw invalid_argument("unpadded_size > size");
+
 	if (size > 0)
 	{
 		buf = (char*) malloc(size*sizeof(char));
@@ -38,13 +40,13 @@ Kernel::Heap::Heap(const char* bin, size_t unpadded_size, size_t size)
 	}
 }
 
-Kernel::Heap::~Heap()
+Heap::~Heap()
 {
 	if (buf)
 		free(buf);
 }
 
-const char* Kernel::Heap::ptr() const
+const char* Heap::ptr() const
 {
 	return buf;
 }
@@ -90,7 +92,7 @@ string to_string(const iOpenCL::SProgramBinaryHeader& hdr)
 {
 	char buf[1024];
 
-	snprintf(buf, ARRAYSIZE(buf) - 1,
+	snprintf(buf, ARRAY_SIZE(buf) - 1,
 			"ProgramBinaryHeader:\n"
 "    Magic: 0x%08x\n"
 "    Version: %d\n"
@@ -103,7 +105,7 @@ string to_string(const iOpenCL::SProgramBinaryHeader& hdr)
 			(int) hdr.GPUPointerSizeInBytes, (int) hdr.NumberOfKernels,
 			(int) hdr.SteppingId, (int) hdr.PatchListSize);
 
-	buf[ARRAYSIZE(buf) - 1] = '\0';
+	buf[ARRAY_SIZE(buf) - 1] = '\0';
 	return string(buf);
 }
 
@@ -114,7 +116,7 @@ string to_string(const iOpenCL::SKernelBinaryHeaderGen9& hdr)
 {
 	char buf[1024];
 
-	snprintf(buf, ARRAYSIZE(buf) - 1,
+	snprintf(buf, ARRAY_SIZE(buf) - 1,
 			"KernelBinaryHeaderGen9:\n"
 "    CheckSum: 0x%08x\n"
 "    ShaderHashCode: 0x%016llx\n"
@@ -131,7 +133,7 @@ string to_string(const iOpenCL::SKernelBinaryHeaderGen9& hdr)
 			(int) hdr.DynamicStateHeapSize, (int) hdr.SurfaceStateHeapSize,
 			(int) hdr.KernelUnpaddedSize);
 
-	buf[ARRAYSIZE(buf) - 1] = '\0';
+	buf[ARRAY_SIZE(buf) - 1] = '\0';
 	return string(buf);
 }
 
@@ -196,11 +198,11 @@ iOpenCL::SKernelBinaryHeaderGen9 read_kernel_binary_header_gen9(
 }
 
 
-Kernel::Parameters build_kernel_params(
+KernelParameters build_kernel_params(
 		const iOpenCL::SProgramBinaryHeader& hdr,
 		const iOpenCL::SKernelBinaryHeader& kernel_hdr)
 {
-	Kernel::Parameters p;
+	KernelParameters p;
 
 	p.device = hdr.Device;
 	p.gpu_pointer_size_in_bytes = hdr.GPUPointerSizeInBytes;
@@ -218,7 +220,7 @@ Kernel::Parameters build_kernel_params(
 void read_kernel_patchlist(
 		const char*& bin, size_t& size,
 		const iOpenCL::SKernelBinaryHeader& kernel_hdr,
-		Kernel::Parameters& params)
+		KernelParameters& params)
 {
 	if (size < kernel_hdr.PatchListSize)
 		throw invalid_argument("Patch list too small");
@@ -240,38 +242,38 @@ void read_kernel_patchlist(
 		case iOpenCL::PATCH_TOKEN_MEDIA_INTERFACE_DESCRIPTOR_LOAD:
 			{
 				static_assert(sizeof(iOpenCL::SPatchMediaInterfaceDescriptorLoad) == 8 + 4);
-				if (item_size != 8 + 4 || params.media_interface_descriptor_load.present)
+				if (item_size != 8 + 4 || params.media_interface_descriptor_load)
 					throw invalid_argument("Failed to read patch item MediaInterfaceDescriptorLoad");
 
-				params.media_interface_descriptor_load.present = true;
-				params.media_interface_descriptor_load.data_offset = read_binary<uint32_t>(bin);
+				params.media_interface_descriptor_load.emplace();
+				params.media_interface_descriptor_load->data_offset = read_binary<uint32_t>(bin);
 			}
 			break;
 
 		case iOpenCL::PATCH_TOKEN_INTERFACE_DESCRIPTOR_DATA:
 			{
 				static_assert(sizeof(iOpenCL::SPatchInterfaceDescriptorData) == 8 + 4*4);
-				if (item_size != 8 + 4*4 || params.interface_descriptor_data.present)
+				if (item_size != 8 + 4*4 || params.interface_descriptor_data)
 					throw invalid_argument("Failed to read patch item InterfaceDescriptorData");
 
-				params.interface_descriptor_data.present = true;
-				params.interface_descriptor_data.offset = read_binary<uint32_t>(bin);
-				params.interface_descriptor_data.sampler_state_offset = read_binary<uint32_t>(bin);
-				params.interface_descriptor_data.kernel_offset = read_binary<uint32_t>(bin);
-				params.interface_descriptor_data.binding_table_offset = read_binary<uint32_t>(bin);
+				params.interface_descriptor_data.emplace();
+				params.interface_descriptor_data->offset = read_binary<uint32_t>(bin);
+				params.interface_descriptor_data->sampler_state_offset = read_binary<uint32_t>(bin);
+				params.interface_descriptor_data->kernel_offset = read_binary<uint32_t>(bin);
+				params.interface_descriptor_data->binding_table_offset = read_binary<uint32_t>(bin);
 			}
 			break;
 
 		case iOpenCL::PATCH_TOKEN_BINDING_TABLE_STATE:
 			{
 				static_assert(sizeof(iOpenCL::SPatchBindingTableState) == 8 + 3*4);
-				if (item_size != 8 + 3*4 || params.binding_table_state.present)
+				if (item_size != 8 + 3*4 || params.binding_table_state)
 					throw invalid_argument("Failed to read patch item BindingTableState");
 
-				params.binding_table_state.present = true;
-				params.binding_table_state.offset = read_binary<uint32_t>(bin);
-				params.binding_table_state.count = read_binary<uint32_t>(bin);
-				params.binding_table_state.surface_state_offset = read_binary<uint32_t>(bin);
+				params.binding_table_state.emplace();
+				params.binding_table_state->offset = read_binary<uint32_t>(bin);
+				params.binding_table_state->count = read_binary<uint32_t>(bin);
+				params.binding_table_state->surface_state_offset = read_binary<uint32_t>(bin);
 			}
 			break;
 
@@ -281,7 +283,7 @@ void read_kernel_patchlist(
 				if (item_size != 8 + 8*4)
 					throw invalid_argument("Failed to read patch item DataParameterBuffer");
 
-				Kernel::Parameters::DataParameterBuffer dpb;
+				KernelParameters::DataParameterBuffer dpb;
 				dpb.type = read_binary<uint32_t>(bin);
 				dpb.argument_number = read_binary<uint32_t>(bin);
 				dpb.offset = read_binary<uint32_t>(bin);
@@ -301,7 +303,7 @@ void read_kernel_patchlist(
 				if (item_size != 8 + 7*4)
 					throw invalid_argument("Failed to read patch item StatelessGlobalMemoryObjectKernelArgument");
 
-				Kernel::Parameters::StatelessGlobalMemoryObjectKernelArgument sgmoa;
+				KernelParameters::StatelessGlobalMemoryObjectKernelArgument sgmoa;
 				sgmoa.argument_number = read_binary<uint32_t>(bin);
 				sgmoa.surface_state_heap_offset = read_binary<uint32_t>(bin);
 				sgmoa.data_param_offset = read_binary<uint32_t>(bin);
@@ -320,7 +322,7 @@ void read_kernel_patchlist(
 				if (item_size != 8 + 4)
 					throw invalid_argument("Failed to read patch item DataParameterStream");
 
-				Kernel::Parameters::DataParameterStream dps;
+				KernelParameters::DataParameterStream dps;
 				dps.data_parameter_stream_size = read_binary<uint32_t>(bin);
 
 				params.data_parameter_streams.push_back(dps);
@@ -330,82 +332,82 @@ void read_kernel_patchlist(
 		case iOpenCL::PATCH_TOKEN_THREAD_PAYLOAD:
 			{
 				static_assert(sizeof(iOpenCL::SPatchThreadPayload) == 8 + 15*4);
-				if (item_size != 8 + 15*4 || params.thread_payload.present)
+				if (item_size != 8 + 15*4 || params.thread_payload)
 					throw invalid_argument("Failed to read patch item ThreadPayload");
 
-				params.thread_payload.present = true;
-				params.thread_payload.header_present = read_binary<uint32_t>(bin);
-				params.thread_payload.local_id_x_present = read_binary<uint32_t>(bin);
-				params.thread_payload.local_id_y_present = read_binary<uint32_t>(bin);
-				params.thread_payload.local_id_z_present = read_binary<uint32_t>(bin);
-				params.thread_payload.local_id_flattened_present = read_binary<uint32_t>(bin);
-				params.thread_payload.indirect_payload_storage = read_binary<uint32_t>(bin);
-				params.thread_payload.unused_per_thread_constant_present = read_binary<uint32_t>(bin);
-				params.thread_payload.get_local_id_present = read_binary<uint32_t>(bin);
-				params.thread_payload.get_group_id_present = read_binary<uint32_t>(bin);
-				params.thread_payload.get_global_offset_present = read_binary<uint32_t>(bin);
-				params.thread_payload.stage_in_grid_origin_present = read_binary<uint32_t>(bin);
-				params.thread_payload.stage_in_grid_size_present = read_binary<uint32_t>(bin);
-				params.thread_payload.offset_to_skip_per_thread_data_load = read_binary<uint32_t>(bin);
-				params.thread_payload.offset_to_skip_set_ffidgp = read_binary<uint32_t>(bin);
-				params.thread_payload.pass_inline_data = read_binary<uint32_t>(bin);
+				params.thread_payload.emplace();
+				params.thread_payload->header_present = read_binary<uint32_t>(bin);
+				params.thread_payload->local_id_x_present = read_binary<uint32_t>(bin);
+				params.thread_payload->local_id_y_present = read_binary<uint32_t>(bin);
+				params.thread_payload->local_id_z_present = read_binary<uint32_t>(bin);
+				params.thread_payload->local_id_flattened_present = read_binary<uint32_t>(bin);
+				params.thread_payload->indirect_payload_storage = read_binary<uint32_t>(bin);
+				params.thread_payload->unused_per_thread_constant_present = read_binary<uint32_t>(bin);
+				params.thread_payload->get_local_id_present = read_binary<uint32_t>(bin);
+				params.thread_payload->get_group_id_present = read_binary<uint32_t>(bin);
+				params.thread_payload->get_global_offset_present = read_binary<uint32_t>(bin);
+				params.thread_payload->stage_in_grid_origin_present = read_binary<uint32_t>(bin);
+				params.thread_payload->stage_in_grid_size_present = read_binary<uint32_t>(bin);
+				params.thread_payload->offset_to_skip_per_thread_data_load = read_binary<uint32_t>(bin);
+				params.thread_payload->offset_to_skip_set_ffidgp = read_binary<uint32_t>(bin);
+				params.thread_payload->pass_inline_data = read_binary<uint32_t>(bin);
 			}
 			break;
 
 		case iOpenCL::PATCH_TOKEN_EXECUTION_ENVIRONMENT:
 			{
 				static_assert(sizeof(iOpenCL::SPatchExecutionEnvironment) == 8 + 28*4 + 1*8);
-				if (item_size != 8 + 28*4 + 1*8 || params.execution_environment.present)
+				if (item_size != 8 + 28*4 + 1*8 || params.execution_environment)
 					throw invalid_argument("Failed to read patch item ExecutionEnvironment");
 
-				params.execution_environment.present = true;
-				params.execution_environment.required_work_group_size_x = read_binary<uint32_t>(bin);
-				params.execution_environment.required_work_group_size_y = read_binary<uint32_t>(bin);
-				params.execution_environment.required_work_group_size_z = read_binary<uint32_t>(bin);
-				params.execution_environment.largest_compiled_simd_size = read_binary<uint32_t>(bin);
-				params.execution_environment.compiled_sub_groups_number = read_binary<uint32_t>(bin);
-				params.execution_environment.has_barriers = read_binary<uint32_t>(bin);
-				params.execution_environment.disable_mid_thread_preemption = read_binary<uint32_t>(bin);
-				params.execution_environment.compiled_simd8 = read_binary<uint32_t>(bin);
-				params.execution_environment.compiled_simd16 = read_binary<uint32_t>(bin);
-				params.execution_environment.compiled_simd32 = read_binary<uint32_t>(bin);
-				params.execution_environment.has_device_enqueue = read_binary<uint32_t>(bin);
-				params.execution_environment.may_access_undeclared_resource = read_binary<uint32_t>(bin);
-				params.execution_environment.uses_fences_for_read_write_images = read_binary<uint32_t>(bin);
-				params.execution_environment.uses_stateless_spill_fill = read_binary<uint32_t>(bin);
-				params.execution_environment.uses_multi_scratch_spaces = read_binary<uint32_t>(bin);
-				params.execution_environment.is_coherent = read_binary<uint32_t>(bin);
-				params.execution_environment.is_initializer = read_binary<uint32_t>(bin);
-				params.execution_environment.is_finalizer = read_binary<uint32_t>(bin);
-				params.execution_environment.subgroup_independent_forward_progress_required =
+				params.execution_environment.emplace();
+				params.execution_environment->required_work_group_size_x = read_binary<uint32_t>(bin);
+				params.execution_environment->required_work_group_size_y = read_binary<uint32_t>(bin);
+				params.execution_environment->required_work_group_size_z = read_binary<uint32_t>(bin);
+				params.execution_environment->largest_compiled_simd_size = read_binary<uint32_t>(bin);
+				params.execution_environment->compiled_sub_groups_number = read_binary<uint32_t>(bin);
+				params.execution_environment->has_barriers = read_binary<uint32_t>(bin);
+				params.execution_environment->disable_mid_thread_preemption = read_binary<uint32_t>(bin);
+				params.execution_environment->compiled_simd8 = read_binary<uint32_t>(bin);
+				params.execution_environment->compiled_simd16 = read_binary<uint32_t>(bin);
+				params.execution_environment->compiled_simd32 = read_binary<uint32_t>(bin);
+				params.execution_environment->has_device_enqueue = read_binary<uint32_t>(bin);
+				params.execution_environment->may_access_undeclared_resource = read_binary<uint32_t>(bin);
+				params.execution_environment->uses_fences_for_read_write_images = read_binary<uint32_t>(bin);
+				params.execution_environment->uses_stateless_spill_fill = read_binary<uint32_t>(bin);
+				params.execution_environment->uses_multi_scratch_spaces = read_binary<uint32_t>(bin);
+				params.execution_environment->is_coherent = read_binary<uint32_t>(bin);
+				params.execution_environment->is_initializer = read_binary<uint32_t>(bin);
+				params.execution_environment->is_finalizer = read_binary<uint32_t>(bin);
+				params.execution_environment->subgroup_independent_forward_progress_required =
 					read_binary<uint32_t>(bin);
 
-				params.execution_environment.compiled_for_greater_than_4gb_buffers = read_binary<uint32_t>(bin);
-				params.execution_environment.num_grf_required = read_binary<uint32_t>(bin);
-				params.execution_environment.workgroup_walk_order_dims = read_binary<uint32_t>(bin);
-				params.execution_environment.has_global_atomics = read_binary<uint32_t>(bin);
-				params.execution_environment.reserved1 = read_binary<uint32_t>(bin);
-				params.execution_environment.reserved2 = read_binary<uint32_t>(bin);
-				params.execution_environment.reserved3 = read_binary<uint32_t>(bin);
-				params.execution_environment.stateless_writes_count = read_binary<uint32_t>(bin);
-				params.execution_environment.use_bindless_mode = read_binary<uint32_t>(bin);
-				params.execution_environment.simd_info = read_binary<uint64_t>(bin);
+				params.execution_environment->compiled_for_greater_than_4gb_buffers = read_binary<uint32_t>(bin);
+				params.execution_environment->num_grf_required = read_binary<uint32_t>(bin);
+				params.execution_environment->workgroup_walk_order_dims = read_binary<uint32_t>(bin);
+				params.execution_environment->has_global_atomics = read_binary<uint32_t>(bin);
+				params.execution_environment->reserved1 = read_binary<uint32_t>(bin);
+				params.execution_environment->reserved2 = read_binary<uint32_t>(bin);
+				params.execution_environment->reserved3 = read_binary<uint32_t>(bin);
+				params.execution_environment->stateless_writes_count = read_binary<uint32_t>(bin);
+				params.execution_environment->use_bindless_mode = read_binary<uint32_t>(bin);
+				params.execution_environment->simd_info = read_binary<uint64_t>(bin);
 			}
 			break;
 
 		case iOpenCL::PATCH_TOKEN_KERNEL_ATTRIBUTES_INFO:
 			{
 				static_assert(sizeof(iOpenCL::SPatchKernelAttributesInfo) == 8 + 4);
-				if (item_size < 8 + 4 || params.kernel_attributes_info.present)
+				if (item_size < 8 + 4 || params.kernel_attributes_info)
 					throw invalid_argument("Failed to read patch item KernelAttributesInfo");
 
-				params.kernel_attributes_info.present = true;
+				params.kernel_attributes_info.emplace();
 				auto attrs_size = read_binary<uint32_t>(bin);
 				if (attrs_size != item_size - (8 + 4))
 					throw invalid_argument("Failed to read patch item KernelAttributesInfo");
 
-				params.kernel_attributes_info.present = 1;
-				params.kernel_attributes_info.attributes = string(bin, strnlen(bin, attrs_size));
+				params.kernel_attributes_info.emplace();
+				params.kernel_attributes_info->attributes = string(bin, strnlen(bin, attrs_size));
 				bin += attrs_size;
 			}
 			break;
@@ -416,7 +418,7 @@ void read_kernel_patchlist(
 				if (item_size < 8 + 6*4)
 					throw invalid_argument("Failed to read patch item KernelArgumentInfo");
 
-				Kernel::Parameters::KernelArgumentInfo arg;
+				KernelParameters::KernelArgumentInfo arg;
 				arg.argument_number = read_binary<uint32_t>(bin);
 
 				uint32_t address_qualifier_size = read_binary<uint32_t>(bin);
@@ -447,7 +449,7 @@ void read_kernel_patchlist(
 				arg.type_name = string(bin, strnlen(bin, type_name_size));
 				bin += type_name_size;
 
-				arg.type_qualifiers = string(bin, strnlen(bin, type_qualifier_size));
+				arg.type_qualifier = string(bin, strnlen(bin, type_qualifier_size));
 				bin += type_qualifier_size;
 
 				params.kernel_argument_infos.push_back(arg);
@@ -460,7 +462,7 @@ void read_kernel_patchlist(
 				if (item_size != 8 + 2*4 || params.allocate_local_surface)
 					throw invalid_argument("Failed to read patch item AllocateLocalSurface");
 
-				Kernel::Parameters::AllocateLocalSurface a;
+				KernelParameters::AllocateLocalSurface a;
 				a.offset = read_binary<uint32_t>(bin);
 				a.total_inline_local_memory_size = read_binary<uint32_t>(bin);
 
@@ -470,7 +472,8 @@ void read_kernel_patchlist(
 
 		default:
 			throw invalid_argument("Unknown patch item with token \"" +
-					to_string(token) + "\" and of size " + to_string(item_size) + ".");
+					std::to_string(token) + "\" and of size " +
+					std::to_string(item_size) + ".");
 		}
 
 		patch_list_size -= item_size;
@@ -479,132 +482,4 @@ void read_kernel_patchlist(
 	size -= kernel_hdr.PatchListSize;
 }
 
-
-/* Adapted from intel-compute-runtime -
- * shared/offline_compiler/source/decoder/binary_decoder.cpp */
-unique_ptr<Kernel> Kernel::read_kernel(const char* bin, size_t size, const string& name)
-{
-	unique_ptr<Kernel> kernel;
-
-	auto hdr = read_program_binary_header(bin, size);
-
-	if (hdr.PatchListSize != 0)
-	{
-		throw runtime_error("Program has patch tokens but patch tokens are "
-				"not supported at program level yet.");
-	}
-
-	/* Parse kernels and find ours */
-	for (uint32_t i = 0; i < hdr.NumberOfKernels; i++)
-	{
-		switch (hdr.Device)
-		{
-		case IGFX_GEN9_CORE:
-			{
-				auto kernel_hdr = read_kernel_binary_header_gen9(bin, size);
-				auto kernel_data_start = bin;
-
-				auto kernel_name = read_kernel_name(bin, size, kernel_hdr);
-
-				/* Read heaps */
-				if (kernel_hdr.GeneralStateHeapSize != 0)
-				{
-					throw invalid_argument("Read a kernel with general state "
-							"heap size != 0, which is not supported");
-				}
-
-				size_t heaps_size =
-					kernel_hdr.KernelHeapSize +
-					kernel_hdr.GeneralStateHeapSize +
-					kernel_hdr.DynamicStateHeapSize +
-					kernel_hdr.SurfaceStateHeapSize;
-
-				if (size < heaps_size)
-					throw invalid_argument("Kernel heaps too small.");
-
-				auto kernel_heap = make_unique<Heap>(
-						bin,
-						kernel_hdr.KernelUnpaddedSize,
-						kernel_hdr.KernelHeapSize);
-
-				bin += kernel_hdr.KernelHeapSize;
-
-				auto dynamic_state_heap = make_unique<Heap>(
-						bin,
-						kernel_hdr.DynamicStateHeapSize,
-						kernel_hdr.DynamicStateHeapSize);
-
-				bin += kernel_hdr.DynamicStateHeapSize;
-
-				auto surface_state_heap = make_unique<Heap>(
-						bin,
-						kernel_hdr.SurfaceStateHeapSize,
-						kernel_hdr.SurfaceStateHeapSize);
-
-				bin += kernel_hdr.SurfaceStateHeapSize;
-
-				size -= heaps_size;
-
-				/* Read patchlist */
-				auto params = build_kernel_params(hdr, kernel_hdr);
-				read_kernel_patchlist(bin, size, kernel_hdr, params);
-
-				/* Verify checksum */
-				auto checksum = gen_hash(kernel_data_start, bin - kernel_data_start) & 0xffffffff;
-				if (kernel_hdr.CheckSum != checksum)
-					throw invalid_argument("Kernel checksum mismatch for kernel `" + kernel_name + "'");
-
-				/* Construct kernel */
-				if (kernel_name == name)
-				{
-					if (kernel)
-					{
-						throw invalid_argument(
-								"The given binary contains multiple kernels "
-								"with the requested name.");
-					}
-
-					kernel = make_unique<Kernel>(
-							kernel_name,
-							params,
-							move(kernel_heap),
-							move(dynamic_state_heap),
-							move(surface_state_heap));
-				}
-			}
-			break;
-
-		default:
-			throw invalid_argument("Unsupported device family");
-		};
-	}
-
-	if (size != 0)
-		throw invalid_argument("Remaining size in binary file is not zero");
-
-	if (!kernel)
-	{
-		throw invalid_argument(
-				"A kernel with the given name was not found in the given binary.");
-	}
-
-	return kernel;
-}
-
-Kernel::Kernel(
-		const std::string& name,
-		const Parameters& params,
-		unique_ptr<Heap>&& kernel_heap,
-		unique_ptr<Heap>&& dynamic_state_heap,
-		unique_ptr<Heap>&& surface_state_heap)
-	:
-		name(name), params(params),
-		kernel_heap(move(kernel_heap)),
-		dynamic_state_heap(move(dynamic_state_heap)),
-		surface_state_heap(move(surface_state_heap))
-{
-}
-
-Kernel::~Kernel()
-{
 }

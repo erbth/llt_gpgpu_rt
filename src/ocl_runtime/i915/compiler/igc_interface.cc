@@ -11,6 +11,7 @@
 #include <vector>
 #include <new>
 #include <stdexcept>
+#include "translate_interfaces.h"
 
 extern "C" {
 #include <dlfcn.h>
@@ -23,6 +24,8 @@ extern "C" {
 
 using namespace std;
 
+
+namespace OCL {
 
 IGCInterface::IntermediateRepresentation::IntermediateRepresentation(
 		CIF::RAII::UPtr_t<IGC::OclTranslationOutputTagOCL>&& data,
@@ -110,10 +113,13 @@ IGCInterface::DLLibrary::~DLLibrary()
 
 /* Adapted from intel-compute-runtime -
  * shared/offline_compiler/source/offline_compiler.cpp ::initialize */
-IGCInterface::IGCInterface(const NEO::HardwareInfo& hw_info)
+IGCInterface::IGCInterface(int dev_id, int dev_revision,
+		const struct intel_device_info& dev_info)
 	:
 		fcl_library(FCL_LIBRARY_NAME), igc_library(IGC_LIBRARY_NAME),
-		hw_info(hw_info)
+		dev_id(dev_id),
+		dev_revision(dev_revision),
+		dev_info(dev_info)
 {
 	/* Initialize FCL */
 	auto fcl_create_main = (CIF::CreateCIFMainFunc_t) dlsym(
@@ -185,8 +191,7 @@ IGCInterface::IGCInterface(const NEO::HardwareInfo& hw_info)
 
 
 	/* Configure target device */
-	igc_device_ctx->SetProfilingTimerResolution(static_cast<float>(
-				hw_info.capabilityTable.defaultProfilingTimerResolution));
+	igc_device_ctx->SetProfilingTimerResolution(1.f / (float) dev_info.timestamp_frequency);
 
 	auto platform = igc_device_ctx->GetPlatformHandle();
 	auto gt_system_info = igc_device_ctx->GetGTSystemInfoHandle();
@@ -195,26 +200,34 @@ IGCInterface::IGCInterface(const NEO::HardwareInfo& hw_info)
 	if (!platform || !gt_system_info || !ftr_wa)
 		throw runtime_error("IGC: Failed to get handle for device configuration");
 
-	IGC::PlatformHelper::PopulateInterfaceWith(*platform, hw_info.platform);
-	IGC::GtSysInfoHelper::PopulateInterfaceWith(*gt_system_info, hw_info.gtSystemInfo);
+	platform->SetProductFamily(get_product_family(dev_info));
+	// platform.ePCHProductFamily = get_pch_product_family(dev_info);
+	// platform.eDisplayCoreFamily = get_display_core_family(dev_info);
+	platform->SetRenderCoreFamily(get_render_core_family(dev_info));
+	// platform->SetPlatformType(get_platform_type(dev_info));
+
+	platform->SetDeviceID(dev_id);
+	platform->SetRevId(dev_revision);
+
+	// IGC::PlatformHelper::PopulateInterfaceWith(*platform, hw_info.platform);
+	// IGC::GtSysInfoHelper::PopulateInterfaceWith(*gt_system_info, hw_info.gtSystemInfo);
 
 	/* Set features */
-	ftr_wa->SetFtrDesktop(hw_info.featureTable.flags.ftrDesktop);
-	ftr_wa->SetFtrChannelSwizzlingXOREnabled(hw_info.featureTable.flags.ftrChannelSwizzlingXOREnabled);
-	ftr_wa->SetFtrIVBM0M1Platform(hw_info.featureTable.flags.ftrIVBM0M1Platform);
-	ftr_wa->SetFtrSGTPVSKUStrapPresent(hw_info.featureTable.flags.ftrSGTPVSKUStrapPresent);
-	ftr_wa->SetFtr5Slice(hw_info.featureTable.flags.ftr5Slice);
+	// ftr_wa->SetFtrDesktop(hw_info.featureTable.flags.ftrDesktop);
+	// ftr_wa->SetFtrChannelSwizzlingXOREnabled(hw_info.featureTable.flags.ftrChannelSwizzlingXOREnabled);
+	// ftr_wa->SetFtrIVBM0M1Platform(hw_info.featureTable.flags.ftrIVBM0M1Platform);
+	// ftr_wa->SetFtrSGTPVSKUStrapPresent(hw_info.featureTable.flags.ftrSGTPVSKUStrapPresent);
+	// ftr_wa->SetFtr5Slice(hw_info.featureTable.flags.ftr5Slice);
 
-	/* Requires BDW or later (i.e. Gen8 or later)
-	 * TODO: add check for that (for older generations simply leave the entire
-	 * call out). */
-	ftr_wa->SetFtrGpGpuMidThreadLevelPreempt(hw_info.featureTable.flags.ftrGpGpuMidThreadLevelPreempt);
+	/* Requires BDW or later (i.e. Gen8 or later) */
+	// if (dev_info.ver >= 8)
+	// 	ftr_wa->SetFtrGpGpuMidThreadLevelPreempt(hw_info.featureTable.flags.ftrGpGpuMidThreadLevelPreempt);
 
-	ftr_wa->SetFtrIoMmuPageFaulting(hw_info.featureTable.flags.ftrIoMmuPageFaulting);
-	ftr_wa->SetFtrWddm2Svm(hw_info.featureTable.flags.ftrWddm2Svm);
-	ftr_wa->SetFtrPooledEuEnabled(hw_info.featureTable.flags.ftrPooledEuEnabled);
+	// ftr_wa->SetFtrIoMmuPageFaulting(hw_info.featureTable.flags.ftrIoMmuPageFaulting);
+	// ftr_wa->SetFtrWddm2Svm(hw_info.featureTable.flags.ftrWddm2Svm);
+	// ftr_wa->SetFtrPooledEuEnabled(hw_info.featureTable.flags.ftrPooledEuEnabled);
 
-	ftr_wa->SetFtrResourceStreamer(hw_info.featureTable.flags.ftrResourceStreamer);
+	// ftr_wa->SetFtrResourceStreamer(hw_info.featureTable.flags.ftrResourceStreamer);
 }
 
 IGCInterface::~IGCInterface()
@@ -266,12 +279,7 @@ string IGCInterface::get_internal_options()
 {
 	string options;
 
-	if (hw_info.capabilityTable.clVersionSupport >= 30)
-		options += "-ocl-version=300 ";
-	else if (hw_info.capabilityTable.clVersionSupport >= 21)
-		options += "-ocl-version=210 ";
-	else
-		options += "-ocl-version=120 ";
+	options += "-ocl-version=120 ";
 
 	/* Add supported extensions */
 	options += "-cl-ext=-all";
@@ -436,4 +444,6 @@ unique_ptr<IGCInterface::Binary> IGCInterface::build(
 string IGCInterface::get_build_log() const
 {
 	return build_log;
+}
+
 }

@@ -20,6 +20,8 @@
   * FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS
   * IN THE SOFTWARE.
   *
+  * Adapted by Thomas Erbesdobler in 2023 for inclusion into i915_bare_gpu; for
+  * changes see version control.
   */
 
 #ifndef INTEL_DEVICE_INFO_H
@@ -28,14 +30,18 @@
 #include <stdbool.h>
 #include <stdint.h>
 
-#include "util/macros.h"
-#include "compiler/shader_enums.h"
-
-#include "intel/common/intel_engine.h"
+#include "../../macros.h"
 
 #ifdef __cplusplus
 extern "C" {
 #endif
+
+
+/* The following macro was copied from src/util/macros.h in the MESA source
+ * tree, and then renamed to provide namespacing. */
+/** Compute ceiling of integer quotient of A divided by B. */
+#define MESA_DIV_ROUND_UP( A, B )  ( ((A) + (B) - 1) / (B) )
+
 
 #define INTEL_DEVICE_MAX_NAME_SIZE        64
 #define INTEL_DEVICE_MAX_SLICES           8
@@ -100,6 +106,7 @@ struct intel_device_info
    int ver;
    int verx10;
    int display_ver;
+   bool lp;
 
    /**
     * This revision is from ioctl (I915_PARAM_REVISION) unlike
@@ -239,7 +246,7 @@ struct intel_device_info
     * to access this array.
     */
    uint8_t subslice_masks[INTEL_DEVICE_MAX_SLICES *
-                          DIV_ROUND_UP(INTEL_DEVICE_MAX_SUBSLICES, 8)];
+                          MESA_DIV_ROUND_UP(INTEL_DEVICE_MAX_SUBSLICES, 8)];
 
    /**
     * The number of enabled subslices (considering fusing). For exactly which
@@ -253,7 +260,7 @@ struct intel_device_info
     */
    uint8_t eu_masks[INTEL_DEVICE_MAX_SLICES *
                     INTEL_DEVICE_MAX_SUBSLICES *
-                    DIV_ROUND_UP(INTEL_DEVICE_MAX_EUS_PER_SUBSLICE, 8)];
+                    MESA_DIV_ROUND_UP(INTEL_DEVICE_MAX_EUS_PER_SUBSLICE, 8)];
 
    /**
     * Stride to access subslice_masks[].
@@ -313,7 +320,7 @@ struct intel_device_info
     * implementation details, the range of scratch ids may be larger than the
     * number of subslices.
     */
-   unsigned max_scratch_ids[MESA_SHADER_STAGES];
+   unsigned max_scratch_ids_compute;
 
    struct {
       /**
@@ -344,12 +351,6 @@ struct intel_device_info
     * See 3DSTATE_PUSH_CONSTANT_ALLOC_*.
     */
    unsigned max_constant_urb_size_kb;
-
-   /**
-    * Size of the command streamer prefetch. This is important to know for
-    * self modifying batches.
-    */
-   unsigned engine_class_prefetch[INTEL_ENGINE_CLASS_COMPUTE + 1];
 
    /**
     * For the longest time the timestamp frequency for Gen's timestamp counter
@@ -429,7 +430,6 @@ static inline bool
 intel_device_info_slice_available(const struct intel_device_info *devinfo,
                                   int slice)
 {
-   assert(slice < INTEL_DEVICE_MAX_SLICES);
    return (devinfo->slice_masks & (1U << slice)) != 0;
 }
 
@@ -485,7 +485,7 @@ intel_device_info_eu_total(const struct intel_device_info *devinfo)
  * On a 16 dualsubslice GPU, the maximum dualsubslice ID is 15. This function
  * would return the exclusive bound : 16.
  */
-static inline unsigned
+static inline int
 intel_device_info_dual_subslice_id_bound(const struct intel_device_info *devinfo)
 {
    /* Start from the last slice/subslice so we find the answer faster. */
@@ -495,8 +495,7 @@ intel_device_info_dual_subslice_id_bound(const struct intel_device_info *devinfo
             return s * devinfo->max_subslices_per_slice + ss + 1;
       }
    }
-   unreachable("Invalid topology");
-   return 0;
+   return -1;
 }
 
 int intel_device_name_to_pci_device_id(const char *name);
@@ -534,3 +533,5 @@ bool intel_device_info_update_memory_info(struct intel_device_info *devinfo,
 #endif
 
 #endif /* INTEL_DEVICE_INFO_H */
+
+// vim: expandtab ts=3 sw=3

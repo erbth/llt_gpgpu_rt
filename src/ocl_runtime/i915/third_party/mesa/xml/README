@@ -1,6 +1,7 @@
 Intel GEN xml-files from the MESA project (from the /src/intel/genxml directory
-in the MESA source code repository), potentially excluding files for unsupported
-architectures
+in the MESA source code repository, e.g. available here:
+https://gitlab.freedesktop.org/mesa/mesa/), potentially excluding files for
+unsupported architectures
 
 The code generated from these .xml files by MESA is subject to the following
 licensing tems:

@@ -1,0 +1,5 @@
+add_executable(i915_memset
+	i915_memset.cc)
+
+target_include_directories(i915_memset PRIVATE ocl_runtime_i915)
+target_link_libraries(i915_memset ocl_runtime_i915)

@@ -1,2 +1,3 @@
-Code in this subdirectory was copied and sometimes modified from the MESA
-project.
+Code in this subdirectory was mostly copied from the MESA project, and in some
+places modified. Files that do not originate in the MESA project but e.g.
+contain some functions thereof cary explicit notice.

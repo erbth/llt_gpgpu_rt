@@ -19,6 +19,9 @@
  * LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING
  * FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS
  * IN THE SOFTWARE.
+ *
+ * Adapted by Thomas Erbesdobler in 2023 for inclusion into i915_bare_gpu; for
+ * changes see version control.
  */
 
 #include <assert.h>
@@ -27,19 +30,250 @@
 #include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
+#include <errno.h>
+#include <inttypes.h>
+#include <sys/types.h>
+#include <sys/stat.h>
+#include <fcntl.h>
 
 #include <xf86drm.h>
 
 #include "intel_device_info.h"
 #include "intel_hwconfig.h"
-#include "intel/common/intel_gem.h"
-#include "util/bitscan.h"
-#include "util/u_debug.h"
-#include "util/log.h"
-#include "util/macros.h"
-#include "util/os_misc.h"
 
-#include "drm-uapi/i915_drm.h"
+#include "intel_utils.h"
+
+#include "../drm-uapi/i915_drm.h"
+
+
+/* The following macros where copied from src/util/macros.h in the MESA source
+ * tree. */
+
+/** Set a single bit */
+#define BITFIELD_BIT(b)      (1u << (b))
+/** Set all bits up to excluding bit b */
+#define BITFIELD_MASK(b)      \
+   ((b) == 32 ? (~0u) : BITFIELD_BIT((b) % 32) - 1)
+/** Set count bits starting from bit b  */
+#define BITFIELD_RANGE(b, count) \
+   (BITFIELD_MASK((b) + (count)) & ~BITFIELD_MASK(b))
+
+/** Maximum of two values: */
+#define MAX2( A, B )   ( (A)>(B) ? (A) : (B) )
+
+/** Minimum of two values: */
+#define MIN2( A, B )   ( (A)<(B) ? (A) : (B) )
+
+/**
+ * Static (compile-time) assertion.
+ */
+#define STATIC_ASSERT(cond) do { \
+   static_assert(cond, #cond); \
+} while (0)
+
+/**
+ * Unreachable macro. Useful for suppressing "control reaches end of non-void
+ * function" warnings.
+ */
+#if defined(HAVE___BUILTIN_UNREACHABLE) || __has_builtin(__builtin_unreachable)
+#define unreachable(str)    \
+do {                        \
+   assert(!str);            \
+   __builtin_unreachable(); \
+} while (0)
+#elif defined (_MSC_VER)
+#define unreachable(str)    \
+do {                        \
+   assert(!str);            \
+   __assume(0);             \
+} while (0)
+#else
+#define unreachable(str) assert(!str)
+#endif
+
+
+/* The following function was copied from src/util/bitscan.h in the MESA source
+ * tree. */
+
+/**
+ * Find last bit set in a word.  The least significant bit is 1.
+ * Return 0 if no bits are set.
+ * Essentially ffs() in the reverse direction.
+ */
+static inline unsigned
+util_last_bit(unsigned u)
+{
+#if defined(HAVE___BUILTIN_CLZ)
+   return u == 0 ? 0 : 32 - __builtin_clz(u);
+#elif defined(_MSC_VER) && (_M_IX86 || _M_ARM || _M_AMD64 || _M_IA64)
+   unsigned long index;
+   if (_BitScanReverse(&index, u))
+      return index + 1;
+   else
+      return 0;
+#else
+   unsigned r = 0;
+   while (u) {
+      r++;
+      u >>= 1;
+   }
+   return r;
+#endif
+}
+
+
+/* The following functions were copied from src/util/os_file.c in the MESA
+ * source tree. */
+static ssize_t
+readN(int fd, char *buf, size_t len)
+{
+   /* err was initially set to -ENODATA but in some BSD systems
+    * ENODATA is not defined and ENOATTR is used instead.
+    * As err is not returned by any function it can be initialized
+    * to -EFAULT that exists everywhere.
+    */
+   int err = -EFAULT;
+   size_t total = 0;
+   do {
+      ssize_t ret = read(fd, buf + total, len - total);
+
+      if (ret < 0)
+         ret = -errno;
+
+      if (ret == -EINTR || ret == -EAGAIN)
+         continue;
+
+      if (ret <= 0) {
+         err = ret;
+         break;
+      }
+
+      total += ret;
+   } while (total != len);
+
+   return total ? (ssize_t)total : err;
+}
+
+char *
+os_read_file(const char *filename, size_t *size)
+{
+   /* Note that this also serves as a slight margin to avoid a 2x grow when
+    * the file is just a few bytes larger when we read it than when we
+    * fstat'ed it.
+    * The string's NULL terminator is also included in here.
+    */
+   size_t len = 64;
+
+   /* NOTE: O_BINARY removed in comparison to the original MESA source (MESA
+    * defined it as 0 if undefined */
+   int fd = open(filename, O_RDONLY);
+   if (fd == -1) {
+      /* errno set by open() */
+      return NULL;
+   }
+
+   /* Pre-allocate a buffer at least the size of the file if we can read
+    * that information.
+    */
+   struct stat stat;
+   if (fstat(fd, &stat) == 0)
+      len += stat.st_size;
+
+   char *buf = malloc(len);
+   if (!buf) {
+      close(fd);
+      errno = -ENOMEM;
+      return NULL;
+   }
+
+   ssize_t actually_read;
+   size_t offset = 0, remaining = len - 1;
+   while ((actually_read = readN(fd, buf + offset, remaining)) == (ssize_t)remaining) {
+      char *newbuf = realloc(buf, 2 * len);
+      if (!newbuf) {
+         free(buf);
+         close(fd);
+         errno = -ENOMEM;
+         return NULL;
+      }
+
+      buf = newbuf;
+      len *= 2;
+      offset += actually_read;
+      remaining = len - offset - 1;
+   }
+
+   close(fd);
+
+   if (actually_read > 0)
+      offset += actually_read;
+
+   /* Final resize to actual size */
+   len = offset + 1;
+   char *newbuf = realloc(buf, len);
+   if (!newbuf) {
+      free(buf);
+      errno = -ENOMEM;
+      return NULL;
+   }
+   buf = newbuf;
+
+   buf[offset] = '\0';
+
+   if (size)
+      *size = offset;
+
+   return buf;
+}
+
+
+/* The following functions were copied from src/util/os_misc.c in the MESA
+ * source tree, and all but the Linux-specific implementations where removed.
+ * (The MESA source code has different implementations for different OSs
+ * distinguished by #ifs.) */
+
+/**
+ * Return the size of the total physical memory.
+ * \param size returns the size of the total physical memory
+ * \return true for success, or false on failure
+ */
+bool
+os_get_total_physical_memory(uint64_t *size)
+{
+   const long phys_pages = sysconf(_SC_PHYS_PAGES);
+   const long page_size = sysconf(_SC_PAGE_SIZE);
+
+   if (phys_pages <= 0 || page_size <= 0)
+      return false;
+
+   *size = (uint64_t)phys_pages * (uint64_t)page_size;
+   return true;
+}
+
+bool
+os_get_available_system_memory(uint64_t *size)
+{
+   char *meminfo = os_read_file("/proc/meminfo", NULL);
+   if (!meminfo)
+      return false;
+
+   char *str = strstr(meminfo, "MemAvailable:");
+   if (!str) {
+      free(meminfo);
+      return false;
+   }
+
+   uint64_t kb_mem_available;
+   if (sscanf(str, "MemAvailable: %" PRIu64, &kb_mem_available) == 1) {
+      free(meminfo);
+      *size = kb_mem_available << 10;
+      return true;
+   }
+
+   free(meminfo);
+   return false;
+}
+
 
 static const struct {
    const char *name;
@@ -178,14 +412,7 @@ static const struct intel_device_info intel_device_info_snb_gt1 = {
    .max_gs_threads = 21, /* conservative; 24 if rendering disabled. */
    .max_wm_threads = 40,
    .urb = {
-      .size = 32,
-      .min_entries = {
-         [MESA_SHADER_VERTEX]   = 24,
-      },
-      .max_entries = {
-         [MESA_SHADER_VERTEX]   = 256,
-         [MESA_SHADER_GEOMETRY] = 256,
-      },
+      .size = 32
    },
    .timestamp_frequency = 12500000,
    .simulator_id = -1,
@@ -208,14 +435,7 @@ static const struct intel_device_info intel_device_info_snb_gt2 = {
    .max_gs_threads = 60,
    .max_wm_threads = 80,
    .urb = {
-      .size = 64,
-      .min_entries = {
-         [MESA_SHADER_VERTEX]   = 24,
-      },
-      .max_entries = {
-         [MESA_SHADER_VERTEX]   = 256,
-         [MESA_SHADER_GEOMETRY] = 256,
-      },
+      .size = 64
    },
    .timestamp_frequency = 12500000,
    .simulator_id = -1,
@@ -245,18 +465,6 @@ static const struct intel_device_info intel_device_info_ivb_gt1 = {
    .max_gs_threads = 36,
    .max_wm_threads = 48,
    .max_cs_threads = 36,
-   .urb = {
-      .min_entries = {
-         [MESA_SHADER_VERTEX]    = 32,
-         [MESA_SHADER_TESS_EVAL] = 10,
-      },
-      .max_entries = {
-         [MESA_SHADER_VERTEX]    = 512,
-         [MESA_SHADER_TESS_CTRL] = 32,
-         [MESA_SHADER_TESS_EVAL] = 288,
-         [MESA_SHADER_GEOMETRY]  = 192,
-      },
-   },
    .simulator_id = 7,
 };
 
@@ -274,18 +482,6 @@ static const struct intel_device_info intel_device_info_ivb_gt2 = {
    .max_gs_threads = 128,
    .max_wm_threads = 172,
    .max_cs_threads = 64,
-   .urb = {
-      .min_entries = {
-         [MESA_SHADER_VERTEX]    = 32,
-         [MESA_SHADER_TESS_EVAL] = 10,
-      },
-      .max_entries = {
-         [MESA_SHADER_VERTEX]    = 704,
-         [MESA_SHADER_TESS_CTRL] = 64,
-         [MESA_SHADER_TESS_EVAL] = 448,
-         [MESA_SHADER_GEOMETRY]  = 320,
-      },
-   },
    .simulator_id = 7,
 };
 
@@ -303,18 +499,6 @@ static const struct intel_device_info intel_device_info_byt = {
    .max_gs_threads = 36,
    .max_wm_threads = 48,
    .max_cs_threads = 32,
-   .urb = {
-      .min_entries = {
-         [MESA_SHADER_VERTEX]    = 32,
-         [MESA_SHADER_TESS_EVAL] = 10,
-      },
-      .max_entries = {
-         [MESA_SHADER_VERTEX]    = 512,
-         [MESA_SHADER_TESS_CTRL] = 32,
-         [MESA_SHADER_TESS_EVAL] = 288,
-         [MESA_SHADER_GEOMETRY]  = 192,
-      },
-   },
    .simulator_id = 10,
 };
 
@@ -337,18 +521,6 @@ static const struct intel_device_info intel_device_info_hsw_gt1 = {
    .max_gs_threads = 70,
    .max_wm_threads = 102,
    .max_cs_threads = 70,
-   .urb = {
-      .min_entries = {
-         [MESA_SHADER_VERTEX]    = 32,
-         [MESA_SHADER_TESS_EVAL] = 10,
-      },
-      .max_entries = {
-         [MESA_SHADER_VERTEX]    = 640,
-         [MESA_SHADER_TESS_CTRL] = 64,
-         [MESA_SHADER_TESS_EVAL] = 384,
-         [MESA_SHADER_GEOMETRY]  = 256,
-      },
-   },
    .simulator_id = 9,
 };
 
@@ -365,18 +537,6 @@ static const struct intel_device_info intel_device_info_hsw_gt2 = {
    .max_gs_threads = 256,
    .max_wm_threads = 204,
    .max_cs_threads = 70,
-   .urb = {
-      .min_entries = {
-         [MESA_SHADER_VERTEX]    = 64,
-         [MESA_SHADER_TESS_EVAL] = 10,
-      },
-      .max_entries = {
-         [MESA_SHADER_VERTEX]    = 1664,
-         [MESA_SHADER_TESS_CTRL] = 128,
-         [MESA_SHADER_TESS_EVAL] = 960,
-         [MESA_SHADER_GEOMETRY]  = 640,
-      },
-   },
    .simulator_id = 9,
 };
 
@@ -393,18 +553,6 @@ static const struct intel_device_info intel_device_info_hsw_gt3 = {
    .max_gs_threads = 256,
    .max_wm_threads = 408,
    .max_cs_threads = 70,
-   .urb = {
-      .min_entries = {
-         [MESA_SHADER_VERTEX]    = 64,
-         [MESA_SHADER_TESS_EVAL] = 10,
-      },
-      .max_entries = {
-         [MESA_SHADER_VERTEX]    = 1664,
-         [MESA_SHADER_TESS_CTRL] = 128,
-         [MESA_SHADER_TESS_EVAL] = 960,
-         [MESA_SHADER_GEOMETRY]  = 640,
-      },
-   },
    .max_constant_urb_size_kb = 32,
    .simulator_id = 9,
 };
@@ -442,19 +590,6 @@ static const struct intel_device_info intel_device_info_bdw_gt1 = {
    .max_eus_per_subslice = 6,
    .l3_banks = 2,
    .max_cs_threads = 42,
-   .urb = {
-      .min_entries = {
-         [MESA_SHADER_VERTEX]    = 64,
-         [MESA_SHADER_TESS_EVAL] = 34,
-      },
-      .max_entries = {
-         [MESA_SHADER_VERTEX]    = 2560,
-         [MESA_SHADER_TESS_CTRL] = 504,
-         [MESA_SHADER_TESS_EVAL] = 1536,
-         /* Reduced from 960, seems to be similar to the bug on Gfx9 GT1. */
-         [MESA_SHADER_GEOMETRY]  = 690,
-      },
-   },
    .simulator_id = 11,
 };
 
@@ -466,18 +601,6 @@ static const struct intel_device_info intel_device_info_bdw_gt2 = {
    .max_eus_per_subslice = 8,
    .l3_banks = 4,
    .max_cs_threads = 56,
-   .urb = {
-      .min_entries = {
-         [MESA_SHADER_VERTEX]    = 64,
-         [MESA_SHADER_TESS_EVAL] = 34,
-      },
-      .max_entries = {
-         [MESA_SHADER_VERTEX]    = 2560,
-         [MESA_SHADER_TESS_CTRL] = 504,
-         [MESA_SHADER_TESS_EVAL] = 1536,
-         [MESA_SHADER_GEOMETRY]  = 960,
-      },
-   },
    .simulator_id = 11,
 };
 
@@ -489,18 +612,6 @@ static const struct intel_device_info intel_device_info_bdw_gt3 = {
    .max_eus_per_subslice = 8,
    .l3_banks = 8,
    .max_cs_threads = 56,
-   .urb = {
-      .min_entries = {
-         [MESA_SHADER_VERTEX]    = 64,
-         [MESA_SHADER_TESS_EVAL] = 34,
-      },
-      .max_entries = {
-         [MESA_SHADER_VERTEX]    = 2560,
-         [MESA_SHADER_TESS_CTRL] = 504,
-         [MESA_SHADER_TESS_EVAL] = 1536,
-         [MESA_SHADER_GEOMETRY]  = 960,
-      },
-   },
    .simulator_id = 11,
 };
 
@@ -518,18 +629,6 @@ static const struct intel_device_info intel_device_info_chv = {
    .max_gs_threads = 80,
    .max_wm_threads = 128,
    .max_cs_threads = 6 * 7,
-   .urb = {
-      .min_entries = {
-         [MESA_SHADER_VERTEX]    = 34,
-         [MESA_SHADER_TESS_EVAL] = 34,
-      },
-      .max_entries = {
-         [MESA_SHADER_VERTEX]    = 640,
-         [MESA_SHADER_TESS_CTRL] = 80,
-         [MESA_SHADER_TESS_EVAL] = 384,
-         [MESA_SHADER_GEOMETRY]  = 256,
-      },
-   },
    .simulator_id = 13,
 };
 
@@ -541,23 +640,12 @@ static const struct intel_device_info intel_device_info_chv = {
    .max_tes_threads = 336,                          \
    .max_threads_per_psd = 64,                       \
    .max_cs_threads = 56,                            \
-   .timestamp_frequency = 12000000,                 \
-   .urb = {                                         \
-      .min_entries = {                              \
-         [MESA_SHADER_VERTEX]    = 64,              \
-         [MESA_SHADER_TESS_EVAL] = 34,              \
-      },                                            \
-      .max_entries = {                              \
-         [MESA_SHADER_VERTEX]    = 1856,            \
-         [MESA_SHADER_TESS_CTRL] = 672,             \
-         [MESA_SHADER_TESS_EVAL] = 1120,            \
-         [MESA_SHADER_GEOMETRY]  = 640,             \
-      },                                            \
-   }
+   .timestamp_frequency = 12000000
 
 #define GFX9_LP_FEATURES                           \
    GFX8_FEATURES,                                  \
    GFX9_HW_INFO,                                   \
+   .lp = true,                                     \
    .has_integer_dword_mul = false,                 \
    .gt = 1,                                        \
    .has_llc = false,                               \
@@ -569,19 +657,7 @@ static const struct intel_device_info intel_device_info_chv = {
    .max_tes_threads = 112,                         \
    .max_gs_threads = 112,                          \
    .max_cs_threads = 6 * 6,                        \
-   .timestamp_frequency = 19200000,                \
-   .urb = {                                        \
-      .min_entries = {                             \
-         [MESA_SHADER_VERTEX]    = 34,             \
-         [MESA_SHADER_TESS_EVAL] = 34,             \
-      },                                           \
-      .max_entries = {                             \
-         [MESA_SHADER_VERTEX]    = 704,            \
-         [MESA_SHADER_TESS_CTRL] = 256,            \
-         [MESA_SHADER_TESS_EVAL] = 416,            \
-         [MESA_SHADER_GEOMETRY]  = 256,            \
-      },                                           \
-   }
+   .timestamp_frequency = 19200000
 
 #define GFX9_LP_FEATURES_3X6                       \
    GFX9_LP_FEATURES,                               \
@@ -596,19 +672,7 @@ static const struct intel_device_info intel_device_info_chv = {
    .max_tcs_threads = 56,                          \
    .max_tes_threads = 56,                          \
    .max_gs_threads = 56,                           \
-   .max_cs_threads = 6 * 6,                        \
-   .urb = {                                        \
-      .min_entries = {                             \
-         [MESA_SHADER_VERTEX]    = 34,             \
-         [MESA_SHADER_TESS_EVAL] = 34,             \
-      },                                           \
-      .max_entries = {                             \
-         [MESA_SHADER_VERTEX]    = 352,            \
-         [MESA_SHADER_TESS_CTRL] = 128,            \
-         [MESA_SHADER_TESS_EVAL] = 208,            \
-         [MESA_SHADER_GEOMETRY]  = 128,            \
-      },                                           \
-   }
+   .max_cs_threads = 6 * 6
 
 #define GFX9_FEATURES                               \
    GFX8_FEATURES,                                   \
@@ -622,10 +686,6 @@ static const struct intel_device_info intel_device_info_skl_gt1 = {
    .num_subslices = { 2, },
    .max_eus_per_subslice = 6,
    .l3_banks = 2,
-   /* GT1 seems to have a bug in the top of the pipe (VF/VS?) fixed functions
-    * leading to some vertices to go missing if we use too much URB.
-    */
-   .urb.max_entries[MESA_SHADER_VERTEX] = 928,
    .simulator_id = 12,
 };
 
@@ -695,11 +755,6 @@ static const struct intel_device_info intel_device_info_kbl_gt1 = {
    .num_subslices = { 2, },
    .max_eus_per_subslice = 6,
    .l3_banks = 2,
-   /* GT1 seems to have a bug in the top of the pipe (VF/VS?) fixed functions
-    * leading to some vertices to go missing if we use too much URB.
-    */
-   .urb.max_entries[MESA_SHADER_VERTEX] = 928,
-   .urb.max_entries[MESA_SHADER_GEOMETRY] = 256,
    .simulator_id = 16,
 };
 
@@ -785,11 +840,6 @@ static const struct intel_device_info intel_device_info_cfl_gt1 = {
    .num_subslices = { 2, },
    .max_eus_per_subslice = 6,
    .l3_banks = 2,
-   /* GT1 seems to have a bug in the top of the pipe (VF/VS?) fixed functions
-    * leading to some vertices to go missing if we use too much URB.
-    */
-   .urb.max_entries[MESA_SHADER_VERTEX] = 928,
-   .urb.max_entries[MESA_SHADER_GEOMETRY] = 256,
    .simulator_id = 24,
 };
 static const struct intel_device_info intel_device_info_cfl_gt2 = {
@@ -840,54 +890,28 @@ static const struct intel_device_info intel_device_info_cfl_gt3 = {
    .num_subslices = _subslices,                       \
    .max_eus_per_subslice = 8
 
-#define GFX11_URB_MIN_MAX_ENTRIES                     \
-   .min_entries = {                                   \
-      [MESA_SHADER_VERTEX]    = 64,                   \
-      [MESA_SHADER_TESS_EVAL] = 34,                   \
-   },                                                 \
-   .max_entries = {                                   \
-      [MESA_SHADER_VERTEX]    = 2384,                 \
-      [MESA_SHADER_TESS_CTRL] = 1032,                 \
-      [MESA_SHADER_TESS_EVAL] = 2384,                 \
-      [MESA_SHADER_GEOMETRY]  = 1032,                 \
-   }
-
 static const struct intel_device_info intel_device_info_icl_gt2 = {
    GFX11_FEATURES(2, 1, subslices(8), 8, INTEL_PLATFORM_ICL),
-   .urb = {
-      GFX11_URB_MIN_MAX_ENTRIES,
-   },
    .simulator_id = 19,
 };
 
 static const struct intel_device_info intel_device_info_icl_gt1_5 = {
    GFX11_FEATURES(1, 1, subslices(6), 6, INTEL_PLATFORM_ICL),
-   .urb = {
-      GFX11_URB_MIN_MAX_ENTRIES,
-   },
    .simulator_id = 19,
 };
 
 static const struct intel_device_info intel_device_info_icl_gt1 = {
    GFX11_FEATURES(1, 1, subslices(4), 6, INTEL_PLATFORM_ICL),
-   .urb = {
-      GFX11_URB_MIN_MAX_ENTRIES,
-   },
    .simulator_id = 19,
 };
 
 static const struct intel_device_info intel_device_info_icl_gt0_5 = {
    GFX11_FEATURES(1, 1, subslices(1), 6, INTEL_PLATFORM_ICL),
-   .urb = {
-      GFX11_URB_MIN_MAX_ENTRIES,
-   },
    .simulator_id = 19,
 };
 
 #define GFX11_LP_FEATURES                           \
-   .urb = {                                         \
-      GFX11_URB_MIN_MAX_ENTRIES,                    \
-   },                                               \
+   .lp = true,                                      \
    .disable_ccs_repack = true,                      \
    .simulator_id = 28
 
@@ -925,19 +949,8 @@ static const struct intel_device_info intel_device_info_ehl_2x4 = {
    .max_eus_per_subslice = 4,
 };
 
-#define GFX12_URB_MIN_MAX_ENTRIES                   \
-   .min_entries = {                                 \
-      [MESA_SHADER_VERTEX]    = 64,                 \
-      [MESA_SHADER_TESS_EVAL] = 34,                 \
-   },                                               \
-   .max_entries = {                                 \
-      [MESA_SHADER_VERTEX]    = 3576,               \
-      [MESA_SHADER_TESS_CTRL] = 1548,               \
-      [MESA_SHADER_TESS_EVAL] = 3576,               \
-      /* Wa_14013840143 */                          \
-      [MESA_SHADER_GEOMETRY]  = 1536,               \
-   }
-
+/* TODO: GEN12 does also have a LP sub-family, which needs to be distinguished
+ * here */
 #define GFX12_HW_INFO                               \
    .ver = 12,                                       \
    .has_pln = false,                                \
@@ -948,10 +961,7 @@ static const struct intel_device_info intel_device_info_ehl_2x4 = {
    .max_tcs_threads = 336,                          \
    .max_tes_threads = 546,                          \
    .max_threads_per_psd = 64,                       \
-   .max_cs_threads = 112, /* threads per DSS */     \
-   .urb = {                                         \
-      GFX12_URB_MIN_MAX_ENTRIES,                    \
-   }
+   .max_cs_threads = 112 /* threads per DSS */
 
 #define GFX12_FEATURES(_gt, _slices, _l3)                       \
    GFX8_FEATURES,                                               \
@@ -1216,8 +1226,8 @@ update_from_single_slice_topology(struct intel_device_info *devinfo,
    devinfo->max_subslices_per_slice = 4;
    devinfo->max_eus_per_subslice = 16;
    devinfo->subslice_slice_stride = 1;
-   devinfo->eu_slice_stride = DIV_ROUND_UP(16 * 4, 8);
-   devinfo->eu_subslice_stride = DIV_ROUND_UP(16, 8);
+   devinfo->eu_slice_stride = MESA_DIV_ROUND_UP(16 * 4, 8);
+   devinfo->eu_subslice_stride = MESA_DIV_ROUND_UP(16, 8);
 
    for (uint32_t ss_idx = 0; ss_idx < topology->max_subslices; ss_idx++) {
       const uint32_t s = ss_idx / 4;
@@ -1281,11 +1291,11 @@ update_from_topology(struct intel_device_info *devinfo,
 
    devinfo->subslice_slice_stride = topology->subslice_stride;
 
-   devinfo->eu_subslice_stride = DIV_ROUND_UP(topology->max_eus_per_subslice, 8);
+   devinfo->eu_subslice_stride = MESA_DIV_ROUND_UP(topology->max_eus_per_subslice, 8);
    devinfo->eu_slice_stride = topology->max_subslices * devinfo->eu_subslice_stride;
 
-   assert(sizeof(devinfo->slice_masks) >= DIV_ROUND_UP(topology->max_slices, 8));
-   memcpy(&devinfo->slice_masks, topology->data, DIV_ROUND_UP(topology->max_slices, 8));
+   assert(sizeof(devinfo->slice_masks) >= MESA_DIV_ROUND_UP(topology->max_slices, 8));
+   memcpy(&devinfo->slice_masks, topology->data, MESA_DIV_ROUND_UP(topology->max_slices, 8));
    devinfo->max_slices = topology->max_slices;
    devinfo->max_subslices_per_slice = topology->max_subslices;
    devinfo->max_eus_per_subslice = topology->max_eus_per_subslice;
@@ -1327,18 +1337,18 @@ update_from_masks(struct intel_device_info *devinfo, uint32_t slice_mask,
    topology->max_slices = util_last_bit(slice_mask);
    topology->max_subslices = util_last_bit(subslice_mask);
 
-   topology->subslice_offset = DIV_ROUND_UP(topology->max_slices, 8);
-   topology->subslice_stride = DIV_ROUND_UP(topology->max_subslices, 8);
+   topology->subslice_offset = MESA_DIV_ROUND_UP(topology->max_slices, 8);
+   topology->subslice_stride = MESA_DIV_ROUND_UP(topology->max_subslices, 8);
 
    uint32_t n_subslices = __builtin_popcount(slice_mask) *
       __builtin_popcount(subslice_mask);
-   uint32_t max_eus_per_subslice = DIV_ROUND_UP(n_eus, n_subslices);
+   uint32_t max_eus_per_subslice = MESA_DIV_ROUND_UP(n_eus, n_subslices);
    uint32_t eu_mask = (1U << max_eus_per_subslice) - 1;
 
    topology->max_eus_per_subslice = max_eus_per_subslice;
    topology->eu_offset = topology->subslice_offset +
-      topology->max_slices * DIV_ROUND_UP(topology->max_subslices, 8);
-   topology->eu_stride = DIV_ROUND_UP(max_eus_per_subslice, 8);
+      topology->max_slices * MESA_DIV_ROUND_UP(topology->max_subslices, 8);
+   topology->eu_stride = MESA_DIV_ROUND_UP(max_eus_per_subslice, 8);
 
    /* Set slice mask in topology */
    for (int b = 0; b < topology->subslice_offset; b++)
@@ -1454,7 +1464,7 @@ intel_get_device_info_from_pci_id(int pci_id,
 #include "pci_ids/i915_pci_ids.h"
 
    default:
-      mesa_logw("Driver does not support the 0x%x PCI ID.", pci_id);
+      fprintf(stderr, "Driver does not support the 0x%x PCI ID.", pci_id);
       return false;
    }
 
@@ -1545,7 +1555,7 @@ getparam_topology(struct intel_device_info *devinfo, int fd)
     * be detected at runtime.
     */
    if (devinfo->ver >= 8)
-      mesa_logw("Kernel 4.1 required to properly query GPU properties.");
+      fprintf(stderr, "Kernel 4.1 required to properly query GPU properties.");
 
    return false;
 }
@@ -1899,49 +1909,7 @@ init_max_scratch_ids(struct intel_device_info *devinfo)
    }
 
    unsigned max_thread_ids = scratch_ids_per_subslice * subslices;
-
-   if (devinfo->verx10 >= 125) {
-      /* On GFX version 12.5, scratch access changed to a surface-based model.
-       * Instead of each shader type having its own layout based on IDs passed
-       * from the relevant fixed-function unit, all scratch access is based on
-       * thread IDs like it always has been for compute.
-       */
-      for (int i = MESA_SHADER_VERTEX; i < MESA_SHADER_STAGES; i++)
-         devinfo->max_scratch_ids[i] = max_thread_ids;
-   } else {
-      unsigned max_scratch_ids[] = {
-         [MESA_SHADER_VERTEX]    = devinfo->max_vs_threads,
-         [MESA_SHADER_TESS_CTRL] = devinfo->max_tcs_threads,
-         [MESA_SHADER_TESS_EVAL] = devinfo->max_tes_threads,
-         [MESA_SHADER_GEOMETRY]  = devinfo->max_gs_threads,
-         [MESA_SHADER_FRAGMENT]  = devinfo->max_wm_threads,
-         [MESA_SHADER_COMPUTE]   = max_thread_ids,
-      };
-      STATIC_ASSERT(sizeof(devinfo->max_scratch_ids) == sizeof(max_scratch_ids));
-      memcpy(devinfo->max_scratch_ids, max_scratch_ids,
-             sizeof(devinfo->max_scratch_ids));
-   }
-}
-
-static unsigned
-intel_device_info_calc_engine_prefetch(const struct intel_device_info *devinfo,
-                                       enum intel_engine_class engine_class)
-{
-   if (devinfo->verx10 < 125)
-      return 512;
-
-   if (intel_device_info_is_mtl(devinfo)) {
-      switch (engine_class) {
-      case INTEL_ENGINE_CLASS_RENDER:
-         return 2048;
-      case INTEL_ENGINE_CLASS_COMPUTE:
-         return 1024;
-      default:
-         return 512;
-      }
-   }
-
-   return 1024;
+   devinfo->max_scratch_ids_compute = max_thread_ids;
 }
 
 static bool
@@ -1960,7 +1928,7 @@ intel_i915_get_device_info_from_fd(int fd, struct intel_device_info *devinfo)
                 &timestamp_frequency))
       devinfo->timestamp_frequency = timestamp_frequency;
    else if (devinfo->ver >= 10) {
-      mesa_loge("Kernel 4.15 required to read the CS timestamp frequency.");
+      fprintf(stderr, "Kernel 4.15 required to read the CS timestamp frequency.");
       return false;
    }
 
@@ -2022,7 +1990,7 @@ intel_get_device_info_from_fd(int fd, struct intel_device_info *devinfo)
     */
    drmDevicePtr drmdev = NULL;
    if (drmGetDevice2(fd, DRM_DEVICE_GET_PCI_REVISION, &drmdev)) {
-      mesa_loge("Failed to query drm device.");
+      fprintf(stderr, "Failed to query drm device.");
       return false;
    }
    if (!intel_get_device_info_from_pci_id
@@ -2037,10 +2005,10 @@ intel_get_device_info_from_fd(int fd, struct intel_device_info *devinfo)
    devinfo->pci_device_id = drmdev->deviceinfo.pci->device_id;
    devinfo->pci_revision_id = drmdev->deviceinfo.pci->revision_id;
    drmFreeDevice(&drmdev);
-   devinfo->no_hw = debug_get_bool_option("INTEL_NO_HW", false);
+   devinfo->no_hw = false;
 
    if (devinfo->ver == 10) {
-      mesa_loge("Gfx10 support is redacted.");
+      fprintf(stderr, "Gfx10 support is redacted.");
       return false;
    }
 
@@ -2057,7 +2025,7 @@ intel_get_device_info_from_fd(int fd, struct intel_device_info *devinfo)
 
    /* region info is required for lmem support */
    if (devinfo->has_local_mem && !devinfo->mem.use_class_instance) {
-      mesa_logw("Could not query local memory size.");
+      fprintf(stderr, "Could not query local memory size.");
       return false;
    }
 
@@ -2067,11 +2035,6 @@ intel_get_device_info_from_fd(int fd, struct intel_device_info *devinfo)
 
    init_max_scratch_ids(devinfo);
 
-   for (enum intel_engine_class engine = INTEL_ENGINE_CLASS_RENDER;
-        engine < ARRAY_SIZE(devinfo->engine_class_prefetch); engine++)
-      devinfo->engine_class_prefetch[engine] =
-            intel_device_info_calc_engine_prefetch(devinfo, engine);
-
    return true;
 }
 
@@ -2079,3 +2042,5 @@ bool intel_device_info_update_memory_info(struct intel_device_info *devinfo, int
 {
    return i915_query_regions(devinfo, fd, true) || compute_system_memory(devinfo, true);
 }
+
+// vim: expandtab ts=3 sw=3
