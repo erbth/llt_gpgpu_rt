@@ -31,6 +31,8 @@ void gem_vm_destroy(int fd, uint32_t id);
 void gem_execbuffer2(int fd, uint32_t ctx_id,
 		std::vector<std::pair<uint32_t, void*>>& bos, size_t batch_len);
 
+int64_t gem_wait(int fd, uint32_t bo, int64_t timeout_ns);
+
 }
 
 #endif /* __I915_UTILS_H */

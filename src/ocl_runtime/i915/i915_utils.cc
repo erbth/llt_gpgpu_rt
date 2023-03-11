@@ -239,4 +239,17 @@ void gem_execbuffer2(int fd, uint32_t ctx_id, vector<pair<uint32_t, void*>>& bos
 	}
 }
 
+int64_t gem_wait(int fd, uint32_t bo, int64_t timeout_ns)
+{
+	struct drm_i915_gem_wait cmd = { 0 };
+	cmd.bo_handle = bo;
+	cmd.timeout_ns = timeout_ns;
+
+	if (drmIoctl(fd, DRM_IOCTL_I915_GEM_WAIT, &cmd))
+		throw system_error(errno, generic_category(), "DRM_IOCTL_I915_GEM_WAIT failed");
+
+	/* Remaining time */
+	return cmd.timeout_ns;
+}
+
 }

@@ -1026,12 +1026,17 @@ void I915PreparedKernelImpl::execute(NDRange global_size, NDRange local_size)
 	gem_execbuffer2(rte.fd, rte.ctx_id, bos, bb_bo_size);
 
 	/* Wait for GPU */
+	/* This IOCTL causes a reasonably high power consumption according to
+	 * intel_gpu_top - maybe verify with monitoring chip power at some point...
+	 * */
+	// gem_wait(rte.fd, bb.handle(), 500 * 1000 * 1000);
+
 	for (;;)
 	{
 		if (*sync_ptr == 1)
 			break;
 
-		usleep(100);
+		usleep(500);
 	}
 }
 
