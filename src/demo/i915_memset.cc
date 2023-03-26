@@ -1,15 +1,12 @@
 #include <cstdio>
 #include <cstdlib>
-#include <cerrno>
 #include <cstring>
 #include <exception>
-#include <system_error>
 
 #include "i915_runtime.h"
+#include "utils.h"
 
 using namespace std;
-
-#define DIV_ROUND_UP(X, Y) (((X) + (Y) - 1) / (Y))
 
 const char* kernel_src = R"KERNELSRC(
 void __kernel cl_memset(uint size, uint val, __global uint* dst)
@@ -19,41 +16,6 @@ void __kernel cl_memset(uint size, uint val, __global uint* dst)
 		dst[i] = val;
 }
 )KERNELSRC";
-
-
-class AlignedBuffer
-{
-protected:
-	char* _ptr;
-	size_t _size;
-
-public:
-	AlignedBuffer(size_t alignment, size_t size_arg)
-		: _size(((size_arg + alignment - 1) / alignment) * alignment)
-	{
-		_ptr = (char*) aligned_alloc(alignment, _size);
-		if (!_ptr)
-			throw system_error(errno, generic_category(), "Failed to allocate aligned memory");
-	}
-
-	AlignedBuffer(const AlignedBuffer&) = delete;
-	AlignedBuffer& operator=(const AlignedBuffer&) = delete;
-
-	~AlignedBuffer()
-	{
-		free(_ptr);
-	}
-
-	char* ptr()
-	{
-		return _ptr;
-	}
-
-	size_t size()
-	{
-		return _size;
-	}
-};
 
 
 int main(int argc, char** argv)

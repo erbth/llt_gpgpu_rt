@@ -12,6 +12,7 @@
 #include <algorithm>
 #include "utils.h"
 #include "i915_kernel_utils.h"
+#include "i915_runtime_impl.h"
 #include "gen9_hw_int.h"
 
 using namespace std;
@@ -40,6 +41,27 @@ void* KernelArgPtr::ptr()
 }
 
 size_t KernelArgPtr::size() const
+{
+	return _size;
+}
+
+KernelArgGEMName::KernelArgGEMName(I915RTEImpl& rte, uint32_t name)
+	: rte(rte)
+{
+	rte.gem_open(name, _handle, _size);
+}
+
+KernelArgGEMName::~KernelArgGEMName()
+{
+	rte.gem_close(_handle);
+}
+
+uint32_t KernelArgGEMName::handle() const
+{
+	return _handle;
+}
+
+size_t KernelArgGEMName::size() const
 {
 	return _size;
 }

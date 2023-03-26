@@ -83,6 +83,7 @@ public:
 
 	/* @param size is in bytes */
 	void add_argument(void*, size_t) override;
+	void add_argument_gem_name(uint32_t name) override;
 
 	template<typename T, const char* C>
 	void add_argument_int(T);
@@ -161,7 +162,10 @@ public:
 	size_t align_size_to_page(size_t size);
 
 	uint32_t gem_userptr(void* ptr, size_t size);
+	void gem_open(uint32_t name, uint32_t& handle, uint64_t& size);
 	void gem_close(uint32_t handle);
+
+	virtual drm_magic_t get_drm_magic() override;
 };
 
 }

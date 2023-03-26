@@ -77,6 +77,18 @@ uint32_t gem_userptr(int fd, void* ptr, uint64_t size, bool probe)
 	return cmd.handle;
 }
 
+void gem_open(int fd, uint32_t name, uint32_t& handle, uint64_t& size)
+{
+	struct drm_gem_open cmd = { 0 };
+	cmd.name = name;
+
+	if (drmIoctl(fd, DRM_IOCTL_GEM_OPEN, &cmd))
+		throw system_error(errno, generic_category(), "DRM_IOCTL_GEM_OPEN failed");
+
+	handle = cmd.handle;
+	size = cmd.size;
+}
+
 /* adapted from igt-gpu-tools lib/ioctl_wrappers.c */
 void gem_close(int fd, uint32_t handle)
 {
@@ -205,19 +217,34 @@ void gem_vm_destroy(int fd, uint32_t id)
 		throw system_error(errno, generic_category(), "DRM_IOCTL_I915_GEM_VM_DESTROY");
 }
 
-void gem_execbuffer2(int fd, uint32_t ctx_id, vector<pair<uint32_t, void*>>& bos, size_t batch_len)
+void gem_execbuffer2(int fd, uint32_t ctx_id,
+		vector<tuple<uint32_t, void*, vector<struct drm_i915_gem_relocation_entry>>>& bos,
+		size_t batch_len)
 {
 	auto objs = new struct drm_i915_gem_exec_object2[bos.size()];
 	try
 	{
+		bool no_reloc = true;
 		memset(objs, 0, sizeof(*objs) * bos.size());
 
 		for (size_t i = 0; i < bos.size(); i++)
 		{
 			auto obj = objs + i;
-			obj->handle = bos[i].first;
-			obj->offset = (uintptr_t) bos[i].second;
-			obj->flags = EXEC_OBJECT_SUPPORTS_48B_ADDRESS | EXEC_OBJECT_PINNED;
+			obj->handle = get<0>(bos[i]);
+			obj->offset = (uintptr_t) get<1>(bos[i]);
+			obj->flags = EXEC_OBJECT_SUPPORTS_48B_ADDRESS;
+
+			auto& relocs = get<2>(bos[i]);
+			if (relocs.size() > 0)
+			{
+				no_reloc = false;
+				obj->relocation_count = relocs.size();
+				obj->relocs_ptr = (uintptr_t) relocs.data();
+			}
+			else
+			{
+				obj->flags |= EXEC_OBJECT_PINNED;
+			}
 		}
 
 		struct drm_i915_gem_execbuffer2 cmd = { 0 };
@@ -225,7 +252,11 @@ void gem_execbuffer2(int fd, uint32_t ctx_id, vector<pair<uint32_t, void*>>& bos
 		cmd.buffer_count = bos.size();
 		cmd.batch_start_offset = 0;
 		cmd.batch_len = batch_len;
-		cmd.flags = I915_EXEC_RENDER | I915_EXEC_NO_RELOC;
+		cmd.flags = I915_EXEC_RENDER;
+
+		if (no_reloc)
+			cmd.flags |= I915_EXEC_NO_RELOC;
+
 		i915_execbuffer2_set_context_id(cmd, ctx_id);
 
 		if (drmIoctl(fd, DRM_IOCTL_I915_GEM_EXECBUFFER2, &cmd))

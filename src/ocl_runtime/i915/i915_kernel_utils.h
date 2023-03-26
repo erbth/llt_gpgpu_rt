@@ -9,6 +9,9 @@
 
 namespace OCL {
 
+/* Prototoypes of mutually required header files */
+class I915RTEImpl;
+
 class KernelArg
 {
 public:
@@ -48,6 +51,21 @@ public:
 	~KernelArgPtr();
 
 	void* ptr();
+	size_t size() const;
+};
+
+class KernelArgGEMName : public KernelArg
+{
+protected:
+	I915RTEImpl& rte;
+	uint32_t _handle;
+	size_t _size;
+
+public:
+	KernelArgGEMName(I915RTEImpl& rte, uint32_t name);
+	~KernelArgGEMName();
+
+	uint32_t handle() const;
 	size_t size() const;
 };
 

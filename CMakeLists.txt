@@ -18,4 +18,11 @@ pkg_check_modules(IGC REQUIRED igc-opencl)
 # Provides structs and constants for device families
 pkg_check_modules(IGDGMM REQUIRED igdgmm)
 
+# Optional dependencies
+pkg_check_modules(XCB xcb xcb-dri2)
+
+if (XCB_FOUND)
+	set(COMPILE_X_DEMOS TRUE)
+endif()
+
 add_subdirectory(src)

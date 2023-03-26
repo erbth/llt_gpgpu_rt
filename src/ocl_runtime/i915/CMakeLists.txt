@@ -14,11 +14,11 @@ add_library(ocl_runtime_i915
 
 target_include_directories(ocl_runtime_i915
 	PRIVATE
-		${LIBDRM_INCLUDE_DIRS}
 		${IGC_INCLUDE_DIRS}
 		${IGDGMM_INCLUDE_DIRS}
 		"${CMAKE_CURRENT_BINARY_DIR}"
 	PUBLIC
+		${LIBDRM_INCLUDE_DIRS}
 		"${CMAKE_CURRENT_SOURCE_DIR}")
 
 target_link_libraries(ocl_runtime_i915 PRIVATE

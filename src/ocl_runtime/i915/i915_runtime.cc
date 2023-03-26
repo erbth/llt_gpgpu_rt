@@ -36,9 +36,24 @@ using namespace std;
 
 namespace OCL
 {
-	using namespace HWInt;
 
-	constexpr int GRF_SIZE = 32;
+using namespace HWInt;
+
+constexpr int GRF_SIZE = 32;
+
+/* Helper classes */
+struct RelocBo final
+{
+	uint32_t handle;
+	size_t size;
+	uint64_t reloc_offset;
+
+	RelocBo(uint32_t handle, size_t size, uint64_t reloc_offset)
+		: handle(handle), size(size), reloc_offset(reloc_offset)
+	{
+	}
+};
+
 
 /* (Mandatory) methods of public interface */
 I915Kernel::~I915Kernel()
@@ -187,6 +202,35 @@ void I915PreparedKernelImpl::add_argument(void* ptr, size_t size)
 	throw invalid_argument("No such kernel argument position");
 }
 
+void I915PreparedKernelImpl::add_argument_gem_name(uint32_t name)
+{
+	unsigned index = args.size();
+
+	for (auto& exp : kernel->params.kernel_argument_infos)
+	{
+		if (exp.argument_number == index)
+		{
+			/* Compare argument types */
+			if (
+					exp.address_qualifier == "__global" &&
+					exp.access_qualifier == "NONE" &&
+					exp.type_name.size() >= 3 &&
+					exp.type_name.find("*;8", exp.type_name.size() - 3) != decltype(exp.type_name)::npos &&
+					exp.type_qualifier == "NONE")
+			{
+				args.push_back(make_unique<KernelArgGEMName>(rte, name));
+				return;
+			}
+
+			throw invalid_argument(
+					string("Argument `") + exp.type_name + "' is of non-pointer type `" +
+						exp.type_name + "', but a pointer type is given");
+		}
+	}
+
+	throw invalid_argument("No such kernel argument position");
+}
+
 void I915PreparedKernelImpl::execute(NDRange global_size, NDRange local_size)
 {
 	/* Ensure that all arguments are bound */
@@ -327,7 +371,8 @@ void I915PreparedKernelImpl::execute(NDRange global_size, NDRange local_size)
 	}
 
 	/* Validate binding table */
-	list<I915UserptrBo> arg_bos;
+	list<I915UserptrBo> arg_userptr_bos;
+	list<RelocBo> arg_reloc_bos;
 
 	if (binding_table_entry_count > 0)
 	{
@@ -365,8 +410,12 @@ void I915PreparedKernelImpl::execute(NDRange global_size, NDRange local_size)
 		size_t cnt_buffer_args = 0;
 		for (auto& arg : args)
 		{
-			if (dynamic_cast<KernelArgPtr*>(arg.get()))
+			if (
+					dynamic_cast<KernelArgPtr*>(arg.get()) ||
+					dynamic_cast<KernelArgGEMName*>(arg.get()))
+			{
 				cnt_buffer_args++;
+			}
 		}
 
 		if (cnt_buffer_args != binding_table_entry_count)
@@ -376,8 +425,12 @@ void I915PreparedKernelImpl::execute(NDRange global_size, NDRange local_size)
 
 		for (unsigned i = 0; i < binding_table_entry_count; i++)
 		{
-			while (dynamic_cast<KernelArgPtr*>(i_kernel_arg->get()) == nullptr)
+			while (
+					dynamic_cast<KernelArgPtr*>(i_kernel_arg->get()) == nullptr &&
+					dynamic_cast<KernelArgGEMName*>(i_kernel_arg->get()) == nullptr)
+			{
 				i_kernel_arg++;
+			}
 
 			memcpy(
 					bts.data,
@@ -447,14 +500,35 @@ void I915PreparedKernelImpl::execute(NDRange global_size, NDRange local_size)
 			}
 
 			/* Bind surface to buffer-argument */
-			auto& kernel_arg = static_cast<KernelArgPtr&>(*(*i_kernel_arg));
-			rss.set_surface_base_address(canonical_address(kernel_arg.ptr()));
-			arg_bos.emplace_back(rte, kernel_arg.ptr(), kernel_arg.size());
+			size_t buf_size;
 
-			if (kernel_arg.size() < 1)
-				throw invalid_argument("Kernel buffer argument with size < 1");
+			auto kernel_arg_ptr = dynamic_cast<KernelArgPtr*>(i_kernel_arg->get());
+			if (kernel_arg_ptr)
+			{
+				buf_size = kernel_arg_ptr->size();
+				if (buf_size < 1)
+					throw invalid_argument("Kernel buffer argument with size < 1");
 
-			uint32_t surface_size = kernel_arg.size() - 1;
+				rss.set_surface_base_address(canonical_address(kernel_arg_ptr->ptr()));
+				arg_userptr_bos.emplace_back(rte, kernel_arg_ptr->ptr(), buf_size);
+			}
+			else
+			{
+				auto kernel_arg_gn = dynamic_cast<KernelArgGEMName*>(i_kernel_arg->get());
+				if (!kernel_arg_gn)
+					throw runtime_error("Expected a pointer-like kernel argument");
+
+				buf_size = kernel_arg_gn->size();
+				if (buf_size < 1)
+					throw invalid_argument("Kernel buffer argument with size < 1");
+
+				rss.set_surface_base_address(0);
+				uint64_t reloc_offset = surface_state_pointer + 8*4;
+				arg_reloc_bos.emplace_back(
+						kernel_arg_gn->handle(), buf_size, reloc_offset);
+			}
+
+			uint32_t surface_size = buf_size - 1;
 			rss.set_width(surface_size & 0x7f);
 			rss.set_height((surface_size >> 7) & 0x3fff);
 			rss.set_depth((surface_size >> 21) & 0x7ff);
@@ -1004,21 +1078,45 @@ void I915PreparedKernelImpl::execute(NDRange global_size, NDRange local_size)
 		bb_ptr += cmd->bin_write(bb_ptr);
 
 	/* Execute Bo */
-	vector<pair<uint32_t, void*>> bos;
+	vector<tuple<uint32_t, void*, vector<struct drm_i915_gem_relocation_entry>>> bos;
+	vector<struct drm_i915_gem_relocation_entry> ssbo_relocs;
 
-	for (auto& bo : arg_bos)
-		bos.emplace_back(bo.handle(), bo.ptr());
+	for (auto& bo : arg_userptr_bos)
+		bos.emplace_back(bo.handle(), bo.ptr(), vector<struct drm_i915_gem_relocation_entry>());
 
-	bos.emplace_back(general_state_bo.handle(), general_state_bo.ptr());
-	bos.emplace_back(surface_state_bo.handle(), surface_state_bo.ptr());
-	bos.emplace_back(dynamic_state_bo.handle(), dynamic_state_bo.ptr());
-	bos.emplace_back(indirect_object_bo.handle(), indirect_object_bo.ptr());
-	bos.emplace_back(instruction_buffer_bo.handle(), instruction_buffer_bo.ptr());
-	bos.emplace_back(bindless_surface_bo.handle(), bindless_surface_bo.ptr());
-	bos.emplace_back(gp_bo.handle(), gp_bo.ptr());
+	for (auto& bo : arg_reloc_bos)
+	{
+		bos.emplace_back(bo.handle, (void*) (uintptr_t) 0,
+				vector<struct drm_i915_gem_relocation_entry>());
 
-	bos.emplace_back(bb2.handle(), bb2.ptr());
-	bos.emplace_back(bb.handle(), bb.ptr());
+		struct drm_i915_gem_relocation_entry reloc = { 0 };
+		reloc.target_handle = bo.handle;
+		reloc.offset = bo.reloc_offset;
+		reloc.write_domain = reloc.read_domains = I915_GEM_DOMAIN_RENDER;
+
+		ssbo_relocs.push_back(reloc);
+	}
+
+	bos.emplace_back(general_state_bo.handle(), general_state_bo.ptr(),
+			vector<struct drm_i915_gem_relocation_entry>());
+
+	bos.emplace_back(surface_state_bo.handle(), surface_state_bo.ptr(), ssbo_relocs);
+	bos.emplace_back(dynamic_state_bo.handle(), dynamic_state_bo.ptr(),
+			vector<struct drm_i915_gem_relocation_entry>());
+
+	bos.emplace_back(indirect_object_bo.handle(), indirect_object_bo.ptr(),
+			vector<struct drm_i915_gem_relocation_entry>());
+
+	bos.emplace_back(instruction_buffer_bo.handle(), instruction_buffer_bo.ptr(),
+			vector<struct drm_i915_gem_relocation_entry>());
+
+	bos.emplace_back(bindless_surface_bo.handle(), bindless_surface_bo.ptr(),
+			vector<struct drm_i915_gem_relocation_entry>());
+
+	bos.emplace_back(gp_bo.handle(), gp_bo.ptr(), vector<struct drm_i915_gem_relocation_entry>());
+
+	bos.emplace_back(bb2.handle(), bb2.ptr(), vector<struct drm_i915_gem_relocation_entry>());
+	bos.emplace_back(bb.handle(), bb.ptr(), vector<struct drm_i915_gem_relocation_entry>());
 
 	volatile uint64_t* sync_ptr = (uint64_t*) gp_bo.ptr();
 	*sync_ptr = 0;
@@ -1345,9 +1443,23 @@ uint32_t I915RTEImpl::gem_userptr(void* ptr, size_t size)
 	return OCL::gem_userptr(fd, ptr, size, has_userptr_probe);
 }
 
+void I915RTEImpl::gem_open(uint32_t name, uint32_t& handle, uint64_t& size)
+{
+	OCL::gem_open(fd, name, handle, size);
+}
+
 void I915RTEImpl::gem_close(uint32_t handle)
 {
 	OCL::gem_close(fd, handle);
+}
+
+drm_magic_t I915RTEImpl::get_drm_magic()
+{
+	drm_magic_t magic;
+	if (drmGetMagic(fd, &magic) != 0)
+		throw runtime_error("drmGetMagic failed");
+
+	return magic;
 }
 
 }

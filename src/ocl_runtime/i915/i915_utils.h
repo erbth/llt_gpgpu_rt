@@ -3,7 +3,7 @@
 #define __I915_UTILS_H
 
 #include <vector>
-#include <utility>
+#include <tuple>
 #include <xf86drm.h>
 #include "third_party/drm-uapi/i915_drm.h"
 
@@ -17,6 +17,8 @@ uint32_t gem_create(int fd, uint64_t* size);
 /* NOTE: ptr, size must be aligned to the system's page size */
 uint32_t gem_userptr(int fd, void* ptr, uint64_t size, bool probe);
 
+void gem_open(int fd, uint32_t name, uint32_t& handle, uint64_t& size);
+
 void gem_close(int fd, uint32_t handle);
 int gem_mmap_gtt_version(int fd);
 int i915_getparam(int fd, int32_t param);
@@ -29,7 +31,8 @@ uint32_t gem_vm_create(int fd);
 void gem_vm_destroy(int fd, uint32_t id);
 
 void gem_execbuffer2(int fd, uint32_t ctx_id,
-		std::vector<std::pair<uint32_t, void*>>& bos, size_t batch_len);
+		std::vector<std::tuple<uint32_t, void*, std::vector<struct drm_i915_gem_relocation_entry>>>& bos,
+		size_t batch_len);
 
 int64_t gem_wait(int fd, uint32_t bo, int64_t timeout_ns);
 
