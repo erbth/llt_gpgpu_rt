@@ -25,14 +25,18 @@ void __kernel fill_drawable(uint size, uint val, __global uint* dst)
 		dst[i] = val;
 }
 
-void __kernel test_pattern(uint width, uint height, uint pitch, __global uint* dst)
+void __kernel test_pattern(uint width, uint height, uint pitch, __global uint* vals, __global uint* dst)
 {
-	uint i = get_global_id(0);
-	uint j = get_global_id(1);
+	uint I = get_global_id(0);
+	uint J = get_global_id(1);
 
-	if (i < width && j < height)
+	uint i = get_group_id(0);
+	uint ii = get_local_id(0);
+
+	if (I < width && J < height)
 	{
-		dst[j*pitch + j] = 0xff;
+		uint y_offset = (J / 8) * pitch * 8 + (J % 8) * 128;
+		dst[ii + i*1024 + y_offset] = vals[(I * 6) / width];
 	}
 }
 )KERNELSRC";
@@ -297,8 +301,8 @@ protected:
 	xcb_connection_t* conn;
 	xcb_window_t wid;
 
-	int width = 200;
-	int height = 200;
+	int width = 3840;
+	int height = 2160;
 	bool closed = false;
 
 	string dri2_driver_name;
@@ -500,7 +504,7 @@ public:
 };
 
 
-void draw(OCL::I915RTE& rte, shared_ptr<OCL::Kernel> kernel, XCBWindow& win)
+void draw(OCL::I915RTE& rte, shared_ptr<OCL::Kernel> kernel, XCBWindow& win, AlignedBuffer& colors)
 {
 	auto buf = win.get_backbuffer();
 
@@ -508,10 +512,16 @@ void draw(OCL::I915RTE& rte, shared_ptr<OCL::Kernel> kernel, XCBWindow& win)
 	auto pkernel = rte.prepare_kernel(kernel);
 	auto& i915_pkernel = static_cast<OCL::I915PreparedKernel&>(*pkernel);
 
-	pkernel->add_argument((unsigned) buf.height * (buf.pitch / 4));
-	pkernel->add_argument(0x0000ff00U);
+	unsigned x_tiles = DIV_ROUND_UP(buf.width, 128);
+
+	pkernel->add_argument((unsigned) buf.width);
+	pkernel->add_argument((unsigned) buf.height);
+	pkernel->add_argument((unsigned) buf.pitch / 4);
+	pkernel->add_argument(colors.ptr(), colors.size());
 	i915_pkernel.add_argument_gem_name(buf.name);
-	pkernel->execute(OCL::NDRange(DIV_ROUND_UP(buf.size(), 4)), OCL::NDRange(256));
+	pkernel->execute(
+			OCL::NDRange(x_tiles * 128, ((buf.height + 1) / 2) * 2),
+			OCL::NDRange(128, 2));
 
 	/* Swap buffers */
 	win.swap_buffers();
@@ -534,18 +544,27 @@ int main(int argc, char** argv)
 		xcb.flush();
 
 		/* Compile kernel */
-		auto kernel = rte->compile_kernel(kernel_src, "fill_drawable", "-cl-std=CL1.2");
+		auto kernel = rte->compile_kernel(kernel_src, "test_pattern", "-cl-std=CL1.2");
 
 		auto build_log = kernel->get_build_log();
 		if (build_log.size() > 0)
 			printf("Build log:\n%s\n", build_log.c_str());
 
 
+		AlignedBuffer colors(rte->get_page_size(), 6 * 4);
+		auto color_ptr = (uint32_t*) colors.ptr();
+		color_ptr[0] = 0xff0000;
+		color_ptr[1] = 0x00ff00;
+		color_ptr[2] = 0x0000ff;
+		color_ptr[3] = 0xffff00;
+		color_ptr[4] = 0x00ffff;
+		color_ptr[5] = 0xff00ff;
+
 		/* Main loop */
 		while (!win.is_closed())
 		{
 			xcb.main_iteration(false);
-			draw(*rte, kernel, win);
+			draw(*rte, kernel, win, colors);
 		}
 	}
 	catch (exception& e)

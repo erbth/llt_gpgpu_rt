@@ -4,6 +4,7 @@
 #include <stdexcept>
 #include <memory>
 #include <vector>
+#include <tuple>
 #include "../ocl_runtime.h"
 #include "igc_progbin.h"
 
@@ -133,7 +134,8 @@ size_t build_cross_thread_data(
 		const NDRange& local_size,
 		const std::vector<std::unique_ptr<KernelArg>>& args,
 		const char* surface_state_base, size_t surface_state_size,
-		char* dst, size_t capacity);
+		char* dst, size_t capacity,
+		std::vector<std::tuple<uint32_t, uint64_t>>& relocs);
 
 }
 

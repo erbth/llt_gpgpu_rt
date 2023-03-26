@@ -116,7 +116,8 @@ size_t build_cross_thread_data(
 		const NDRange& local_size,
 		const vector<unique_ptr<KernelArg>>& args,
 		const char* surface_state_base, size_t surface_state_size,
-		char* dst, size_t capacity)
+		char* dst, size_t capacity,
+		vector<tuple<uint32_t, uint64_t>>& relocs)
 {
 	size_t size = 0;
 
@@ -266,13 +267,20 @@ size_t build_cross_thread_data(
 
 		case iOpenCL::DATA_PARAMETER_BUFFER_STATEFUL:
 			{
-				// printf("buffer stateful\n");
-
 				if (args.size() <= dpb.argument_number)
 					throw invalid_argument("Missing kernel argument");
 
-				/* TODO: Do we have to find the binding table entry here? */
+				/* TODO: What is this? */
 				uint32_t bt_entry = 0;
+				for (unsigned i = 0; i < dpb.argument_number; i++)
+				{
+					if (
+							dynamic_cast<const KernelArgPtr*>(args[i].get()) ||
+							dynamic_cast<const KernelArgGEMName*>(args[i].get()))
+					{
+						bt_entry++;
+					}
+				}
 
 				set_param(
 						dpb.offset,
@@ -305,14 +313,38 @@ size_t build_cross_thread_data(
 					"state does not lie in the surface state heap");
 		}
 
-		memcpy(rss.data,
-				surface_state_base + sgo.surface_state_heap_offset,
-				sizeof(rss.data));
+		if (sgo.data_param_size != 8)
+		{
+			throw invalid_argument("Stateless global memory object with data "
+					"param size != 8");
+		}
+
+		/* Find argument for surface state */
+		auto arg = args[sgo.argument_number].get();
+		auto arg_gem_name = dynamic_cast<const KernelArgGEMName*>(arg);
+		uint64_t addr;
+
+		if (arg_gem_name)
+		{
+			/* Relocate bo start address */
+			relocs.push_back({arg_gem_name->handle(), sgo.data_param_offset});
+
+			addr = 0;
+		}
+		else
+		{
+			/* Take address of pinned bo */
+			memcpy(rss.data,
+					surface_state_base + sgo.surface_state_heap_offset,
+					sizeof(rss.data));
+
+			addr = rss.get_surface_base_address();
+		}
 
 		set_param(
 				sgo.data_param_offset,
 				sgo.data_param_size,
-				rss.get_surface_base_address(),
+				addr,
 				size, dst, capacity);
 	}
 

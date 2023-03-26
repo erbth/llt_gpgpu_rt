@@ -370,7 +370,7 @@ void I915PreparedKernelImpl::execute(NDRange global_size, NDRange local_size)
 				kernel->surface_state_heap->size);
 	}
 
-	/* Validate binding table */
+	/* Validate binding table and set surface pointers */
 	list<I915UserptrBo> arg_userptr_bos;
 	list<RelocBo> arg_reloc_bos;
 
@@ -425,6 +425,10 @@ void I915PreparedKernelImpl::execute(NDRange global_size, NDRange local_size)
 
 		for (unsigned i = 0; i < binding_table_entry_count; i++)
 		{
+			/* Safety check */
+			if (i_kernel_arg == args.end())
+				throw runtime_error("No more buffer-like arguments");
+
 			while (
 					dynamic_cast<KernelArgPtr*>(i_kernel_arg->get()) == nullptr &&
 					dynamic_cast<KernelArgGEMName*>(i_kernel_arg->get()) == nullptr)
@@ -434,10 +438,10 @@ void I915PreparedKernelImpl::execute(NDRange global_size, NDRange local_size)
 
 			memcpy(
 					bts.data,
-					(char*) surface_state_bo.ptr() + binding_table_pointer,
+					(char*) surface_state_bo.ptr() + binding_table_pointer + bts.cnt_bytes * i,
 					bts.cnt_bytes);
 
-			uint64_t surface_state_pointer = bts.get_surface_state_pointer();
+			uint64_t surface_state_pointer = bts.get_surface_state_pointer() << 6;
 			if (surface_state_pointer + rss.cnt_bytes > kernel->surface_state_heap->size)
 			{
 				throw invalid_argument("Surface state block does not fit in "
@@ -534,6 +538,8 @@ void I915PreparedKernelImpl::execute(NDRange global_size, NDRange local_size)
 			rss.set_depth((surface_size >> 21) & 0x7ff);
 
 			memcpy((char*) surface_state_bo.ptr() + surface_state_pointer, rss.data, rss.cnt_bytes);
+
+			i_kernel_arg++;
 		}
 
 		idesc.set_binding_table_pointer(binding_table_pointer >> 5);
@@ -714,13 +720,15 @@ void I915PreparedKernelImpl::execute(NDRange global_size, NDRange local_size)
 	DynamicBuffer<char> indirect_data(cross_thread_size_bytes);
 
 	/* Build cross-thread data */
+	vector<tuple<uint32_t, uint64_t>> indirect_data_relocs;
 	build_cross_thread_data(
 			kernel->params,
 			NDRange(0, 0, 0),
 			local_size,
 			args,
 			(const char*) surface_state_bo.ptr(), surface_state_size,
-			indirect_data.ptr(), cross_thread_size_bytes);
+			indirect_data.ptr(), cross_thread_size_bytes,
+			indirect_data_relocs);
 
 
 	/* Build per-thread data */
@@ -774,6 +782,15 @@ void I915PreparedKernelImpl::execute(NDRange global_size, NDRange local_size)
 		if (tp.unused_per_thread_constant_present > 0)
 			per_thread_ptr += GRF_SIZE;
 	}
+
+	if (tp.get_local_id_present)
+		throw invalid_argument("get_local_id_present");
+
+	if (tp.get_group_id_present)
+		throw invalid_argument("get_group_id_present");
+
+	if (tp.get_global_offset_present)
+		throw invalid_argument("get_global_offset_present");
 
 	// printf("DEBUG header_present: %d\n", (int) tp.header_present);
 	// printf("DEBUG local_id_x_present: %d\n", (int) tp.local_id_x_present);
@@ -1097,15 +1114,43 @@ void I915PreparedKernelImpl::execute(NDRange global_size, NDRange local_size)
 		ssbo_relocs.push_back(reloc);
 	}
 
+	vector<struct drm_i915_gem_relocation_entry> iobo_relocs;
+	for (auto [handle, offset] : indirect_data_relocs)
+	{
+		/* Ensure that the bo is in the list of bos passed to EXECBUFFER2 */
+		bool found = false;
+		for (auto& bo : bos)
+		{
+			if (get<0>(bo) == handle)
+			{
+				found = true;
+				break;
+			}
+		}
+
+		if (!found)
+		{
+			throw runtime_error("Bo specified for indirect object buffer "
+					"relocation but is not in list of bos");
+		}
+
+		struct drm_i915_gem_relocation_entry reloc = { 0 };
+		reloc.target_handle = handle;
+		reloc.offset = offset;
+		reloc.write_domain = reloc.read_domains = I915_GEM_DOMAIN_RENDER;
+
+		iobo_relocs.push_back(reloc);
+	}
+
 	bos.emplace_back(general_state_bo.handle(), general_state_bo.ptr(),
 			vector<struct drm_i915_gem_relocation_entry>());
 
 	bos.emplace_back(surface_state_bo.handle(), surface_state_bo.ptr(), ssbo_relocs);
+
 	bos.emplace_back(dynamic_state_bo.handle(), dynamic_state_bo.ptr(),
 			vector<struct drm_i915_gem_relocation_entry>());
 
-	bos.emplace_back(indirect_object_bo.handle(), indirect_object_bo.ptr(),
-			vector<struct drm_i915_gem_relocation_entry>());
+	bos.emplace_back(indirect_object_bo.handle(), indirect_object_bo.ptr(), iobo_relocs);
 
 	bos.emplace_back(instruction_buffer_bo.handle(), instruction_buffer_bo.ptr(),
 			vector<struct drm_i915_gem_relocation_entry>());
