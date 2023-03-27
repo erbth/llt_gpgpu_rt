@@ -232,6 +232,7 @@ size_t build_cross_thread_data(
 				if (args.size() <= dpb.argument_number)
 					throw invalid_argument("Missing kernel argument");
 
+
 				if (try_set_int_arg<int32_t>(
 							args[dpb.argument_number].get(),
 							dpb.offset, dpb.data_size, size, dst, capacity))

@@ -39,6 +39,36 @@ void __kernel test_pattern(uint width, uint height, uint pitch, __global uint* v
 		dst[ii + i*1024 + y_offset] = vals[(I * 6) / width];
 	}
 }
+
+void __kernel display_irct(
+	uint width, uint height, uint dst_pitch, uint src_pitch,
+	__global short* src_y, __global short* src_cb, __global short* src_cr,
+	__global uint* dst)
+{
+	uint I = get_global_id(0);
+	uint J = get_global_id(1);
+
+	uint i = get_group_id(0);
+	uint ii = get_local_id(0);
+
+	if (I < width && J < height)
+	{
+		int src_offset = J*src_pitch + I;
+		int y = src_y[src_offset];
+		int cb = src_cb[src_offset];
+		int cr = src_cr[src_offset];
+
+		int g = y - ((cb + cr) >> 2);
+		int b = g + cb;
+		int r = g + cr;
+
+		r <<= 16;
+		g <<= 8;
+
+		uint y_offset = (J / 8) * dst_pitch * 8 + (J % 8) * 128;
+		dst[ii + i*1024 + y_offset] = r | g | b;
+	}
+}
 )KERNELSRC";
 
 
@@ -501,11 +531,56 @@ public:
 
 		free(rep);
 	}
+
+	int get_width() const
+	{
+		return width;
+	}
+
+	int get_height() const
+	{
+		return height;
+	}
 };
 
 
-void draw(OCL::I915RTE& rte, shared_ptr<OCL::Kernel> kernel, XCBWindow& win, AlignedBuffer& colors)
+void update_pattern(int width, int height,
+		AlignedBuffer& y, AlignedBuffer& cb, AlignedBuffer& cr)
 {
+	static int y_vals[6]  = {  63,  127,  63,  191,  191, 127 };
+	static int cb_vals[6] = {   0, -255, 255, -255,    0, 255 };
+	static int cr_vals[6] = { 255, -255,   0,    0, -255, 255 };
+
+	if (width > 3840 || height > 2160)
+		return;
+
+	auto y_ptr = (int16_t*) y.ptr();
+	auto cb_ptr = (int16_t*) cb.ptr();
+	auto cr_ptr = (int16_t*) cr.ptr();
+
+	for (int i = 0; i < height; i++)
+	{
+		int I = (i * 6) / height;
+
+		for (int j = 0; j < width; j++)
+		{
+			y_ptr[j] = y_vals[I];
+			cb_ptr[j] = cb_vals[I];
+			cr_ptr[j] = cr_vals[I];
+		}
+
+		y_ptr += 3840;
+		cb_ptr += 3840;
+		cr_ptr += 3840;
+	}
+}
+
+void draw(OCL::I915RTE& rte, shared_ptr<OCL::Kernel> kernel, XCBWindow& win,
+		AlignedBuffer& y, AlignedBuffer& cb, AlignedBuffer& cr)
+{
+	if (win.get_width() > 3840 || win.get_height() > 2160)
+		return;
+
 	auto buf = win.get_backbuffer();
 
 	/* Execute kernel */
@@ -517,7 +592,10 @@ void draw(OCL::I915RTE& rte, shared_ptr<OCL::Kernel> kernel, XCBWindow& win, Ali
 	pkernel->add_argument((unsigned) buf.width);
 	pkernel->add_argument((unsigned) buf.height);
 	pkernel->add_argument((unsigned) buf.pitch / 4);
-	pkernel->add_argument(colors.ptr(), colors.size());
+	pkernel->add_argument((unsigned) 3840);
+	pkernel->add_argument(y.ptr(), y.size());
+	pkernel->add_argument(cb.ptr(), cb.size());
+	pkernel->add_argument(cr.ptr(), cr.size());
 	i915_pkernel.add_argument_gem_name(buf.name);
 	pkernel->execute(
 			OCL::NDRange(x_tiles * 128, ((buf.height + 1) / 2) * 2),
@@ -544,27 +622,34 @@ int main(int argc, char** argv)
 		xcb.flush();
 
 		/* Compile kernel */
-		auto kernel = rte->compile_kernel(kernel_src, "test_pattern", "-cl-std=CL1.2");
+		auto kernel = rte->compile_kernel(kernel_src, "display_irct", "-cl-std=CL1.2");
 
 		auto build_log = kernel->get_build_log();
 		if (build_log.size() > 0)
 			printf("Build log:\n%s\n", build_log.c_str());
 
 
-		AlignedBuffer colors(rte->get_page_size(), 6 * 4);
-		auto color_ptr = (uint32_t*) colors.ptr();
-		color_ptr[0] = 0xff0000;
-		color_ptr[1] = 0x00ff00;
-		color_ptr[2] = 0x0000ff;
-		color_ptr[3] = 0xffff00;
-		color_ptr[4] = 0x00ffff;
-		color_ptr[5] = 0xff00ff;
+		const size_t src_size = 2 * 3840 * 2160;
+		AlignedBuffer y(rte->get_page_size(), src_size);
+		AlignedBuffer cb(rte->get_page_size(), src_size);
+		AlignedBuffer cr(rte->get_page_size(), src_size);
 
 		/* Main loop */
+		int last_width = 0, last_height = 0;
+
 		while (!win.is_closed())
 		{
+			auto cur_width = win.get_width(), cur_height = win.get_height();
+			if (last_width != cur_width || last_height != cur_height)
+			{
+				last_width = cur_width;
+				last_height = cur_height;
+
+				update_pattern(cur_width, cur_height, y, cb, cr);
+			}
+
 			xcb.main_iteration(false);
-			draw(*rte, kernel, win, colors);
+			draw(*rte, kernel, win, y, cb, cr);
 		}
 	}
 	catch (exception& e)
