@@ -1,6 +1,14 @@
 cmake_minimum_required(VERSION 3.13)
 
-project(i915_bare_gpu C CXX)
+project(llt_gpgpu_rt C CXX)
+
+# Project version
+set(LLT_GPGPU_RT_VERSION_MAJOR 1)
+set(LLT_GPGPU_RT_VERSION_MINOR 0)
+set(LLT_GPGPU_RT_VERSION_PATCH 0)
+
+# Options
+option(ENABLE_ONLINE_COMPILER "Enable online IGC compiler" OFF)
 
 # Require GCC
 if (NOT "${CMAKE_CXX_COMPILER_ID}" STREQUAL "GNU")
@@ -24,5 +32,9 @@ pkg_check_modules(XCB xcb xcb-dri2)
 if (XCB_FOUND)
 	set(COMPILE_X_DEMOS TRUE)
 endif()
+
+# Configure a config file
+configure_file(llt_gpgpu_rt_config.h.in llt_gpgpu_rt_config.h)
+include_directories("${CMAKE_BINARY_DIR}")
 
 add_subdirectory(src)

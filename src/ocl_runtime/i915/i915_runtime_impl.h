@@ -156,6 +156,9 @@ public:
 	std::shared_ptr<Kernel> compile_kernel(const char* src, const char* name,
 			const char* options) override;
 
+	std::shared_ptr<Kernel> read_compiled_kernel(
+			const I915CompiledProgram& program, const char* name) override;
+
 	std::unique_ptr<PreparedKernel> prepare_kernel(std::shared_ptr<Kernel> kernel) override;
 
 	size_t get_page_size() override;

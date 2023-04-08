@@ -16,6 +16,7 @@
 #include <cif/common/cif_main.h>
 #include <ocl_igc_interface/fcl_ocl_device_ctx.h>
 #include <ocl_igc_interface/igc_ocl_device_ctx.h>
+#include <igfxfmid.h>
 
 #include "../third_party/mesa/intel_device_info.h"
 
@@ -86,9 +87,9 @@ protected:
 	DLLibrary fcl_library;
 	DLLibrary igc_library;
 
-	const int dev_id;
-	const int dev_revision;
-	const struct intel_device_info& dev_info;
+	const PRODUCT_FAMILY product_family;
+	const GFXCORE_FAMILY render_core_family;
+	const uint64_t timestamp_frequency;
 
 	CIF::RAII::UPtr_t<CIF::CIFMain> fcl_main = nullptr;
 	CIF::RAII::UPtr_t<IGC::FclOclDeviceCtxTagOCL> fcl_device_ctx = nullptr;
@@ -107,7 +108,9 @@ protected:
 	std::string build_log;
 
 public:
-	IGCInterface(int dev_id, int dev_revision, const struct intel_device_info& dev_info);
+	IGCInterface(const struct intel_device_info& dev_info);
+	IGCInterface(PRODUCT_FAMILY product_family,
+			GFXCORE_FAMILY render_core_family, uint64_t timestamp_frequency);
 
 	IGCInterface(const IGCInterface&) = delete;
 	IGCInterface& operator=(const IGCInterface&) = delete;

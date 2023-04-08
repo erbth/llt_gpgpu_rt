@@ -19,9 +19,14 @@
 #include "i915_runtime_impl.h"
 #include "i915_utils.h"
 #include "igc_progbin.h"
-#include "compiler/igc_interface.h"
 #include "utils.h"
 #include "macros.h"
+
+#include "llt_gpgpu_rt_config.h"
+
+#if ENABLE_ONLINE_COMPILER
+#include "compiler/igc_interface.h"
+#endif
 
 extern "C" {
 #include <unistd.h>
@@ -1452,7 +1457,9 @@ I915RTEImpl::~I915RTEImpl()
 shared_ptr<Kernel> I915RTEImpl::compile_kernel(
 		const char* src, const char* name, const char* options)
 {
-	IGCInterface igc(dev_id, dev_revision, dev_info);
+#if ENABLE_ONLINE_COMPILER
+
+	IGCInterface igc(dev_info);
 	auto kernel_bin = igc.build(src, options);
 	auto build_log = igc.get_build_log();
 
@@ -1461,6 +1468,24 @@ shared_ptr<Kernel> I915RTEImpl::compile_kernel(
 
 	/* Read IGC kernel binary */
 	return I915KernelImpl::read_kernel(kernel_bin->get_bin(), kernel_bin->bin_size, name, build_log);
+
+#else
+	throw runtime_error("Online compiler for I915 not enabled in this version of llt_gpgpu_rt");
+#endif
+}
+
+shared_ptr<Kernel> I915RTEImpl::read_compiled_kernel(
+		const I915CompiledProgram& program, const char* name)
+{
+	auto bin = program.get_bin(dev_info.platform);
+	if (!bin)
+	{
+		throw runtime_error("This offline compiled kernel is not available for "
+				"the current architecture");
+	}
+
+	return I915KernelImpl::read_kernel(bin->first, bin->second, name,
+			"Kernel has been compiled offline, hence no build log is available");
 }
 
 unique_ptr<PreparedKernel> I915RTEImpl::prepare_kernel(std::shared_ptr<Kernel> _kernel)

@@ -1,30 +1,45 @@
 # Runtime library
-add_library(ocl_runtime_i915
+set(OCL_RUNTIME_I915_SRC
 	i915_runtime.cc
 	i915_utils.cc
 	i915_kernel_utils.cc
+	i915_compiled_program.cc
 	igc_progbin.cc
 	hash.cc
 	utils.cc
-	compiler/igc_interface.cc
 	third_party/mesa/intel_device_info.c
 	third_party/mesa/intel_hwconfig.c
-	../ocl_runtime.cc
-)
+	../ocl_runtime.cc)
+
+set(OCL_RUNTIME_I915_REQ_INCLUDE_DIRS
+	${IGC_INCLUDE_DIRS}
+	${IGDGMM_INCLUDE_DIRS}
+	"${CMAKE_CURRENT_BINARY_DIR}")
+
+set(OCL_RUNTIME_I915_REQ_LIBRARIES ${LIBDRM_LIBRARIES})
+
+if (ENABLE_ONLINE_COMPILER)
+	set(OCL_RUNTIME_I915_SRC ${OCL_RUNTIME_I915_SRC}
+		compiler/igc_interface.cc
+		compiler/translate_interfaces.cc)
+
+	set(OCL_RUNTIME_I915_REQ_LIBRARIES ${OCL_RUNTIME_I915_REQ_LIBRARIES}
+		${IGC_LIBRARIES}
+		-ldl)
+endif()
+
+
+add_library(ocl_runtime_i915 ${OCL_RUNTIME_I915_SRC})
 
 target_include_directories(ocl_runtime_i915
 	PRIVATE
-		${IGC_INCLUDE_DIRS}
-		${IGDGMM_INCLUDE_DIRS}
-		"${CMAKE_CURRENT_BINARY_DIR}"
+		${OCL_RUNTIME_I915_REQ_INCLUDE_DIRS}
 	PUBLIC
 		${LIBDRM_INCLUDE_DIRS}
 		"${CMAKE_CURRENT_SOURCE_DIR}")
 
-target_link_libraries(ocl_runtime_i915 PRIVATE
-	${LIBDRM_LIBRARIES}
-	${IGC_LIBRARIES}
-	-ldl)
+target_link_libraries(ocl_runtime_i915 PRIVATE ${OCL_RUNTIME_I915_REQ_LIBRARIES})
+
 
 # Generate hw interface header files from XML files
 set(XML_FILES
@@ -54,3 +69,6 @@ foreach(XML_FILE ${XML_FILES})
 
 	target_sources(ocl_runtime_i915 PRIVATE "${XML_HDR_OUTPUT}")
 endforeach()
+
+
+add_subdirectory(compiler)

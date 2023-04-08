@@ -111,15 +111,21 @@ IGCInterface::DLLibrary::~DLLibrary()
 		terminate();
 }
 
+
+IGCInterface::IGCInterface(const struct intel_device_info& dev_info)
+	: IGCInterface(get_product_family(dev_info),
+			get_render_core_family(dev_info), dev_info.timestamp_frequency)
+{
+}
+
 /* Adapted from intel-compute-runtime -
  * shared/offline_compiler/source/offline_compiler.cpp ::initialize */
-IGCInterface::IGCInterface(int dev_id, int dev_revision,
-		const struct intel_device_info& dev_info)
+IGCInterface::IGCInterface(PRODUCT_FAMILY product_family,
+		GFXCORE_FAMILY render_core_family, uint64_t timestamp_frequency)
 	:
 		fcl_library(FCL_LIBRARY_NAME), igc_library(IGC_LIBRARY_NAME),
-		dev_id(dev_id),
-		dev_revision(dev_revision),
-		dev_info(dev_info)
+		product_family(product_family), render_core_family(render_core_family),
+		timestamp_frequency(timestamp_frequency)
 {
 	/* Initialize FCL */
 	auto fcl_create_main = (CIF::CreateCIFMainFunc_t) dlsym(
@@ -191,7 +197,7 @@ IGCInterface::IGCInterface(int dev_id, int dev_revision,
 
 
 	/* Configure target device */
-	igc_device_ctx->SetProfilingTimerResolution(1.f / (float) dev_info.timestamp_frequency);
+	igc_device_ctx->SetProfilingTimerResolution(1.f / (float) timestamp_frequency);
 
 	auto platform = igc_device_ctx->GetPlatformHandle();
 	auto gt_system_info = igc_device_ctx->GetGTSystemInfoHandle();
@@ -200,14 +206,14 @@ IGCInterface::IGCInterface(int dev_id, int dev_revision,
 	if (!platform || !gt_system_info || !ftr_wa)
 		throw runtime_error("IGC: Failed to get handle for device configuration");
 
-	platform->SetProductFamily(get_product_family(dev_info));
+	platform->SetProductFamily(product_family);
 	// platform.ePCHProductFamily = get_pch_product_family(dev_info);
 	// platform.eDisplayCoreFamily = get_display_core_family(dev_info);
-	platform->SetRenderCoreFamily(get_render_core_family(dev_info));
+	platform->SetRenderCoreFamily(render_core_family);
 	// platform->SetPlatformType(get_platform_type(dev_info));
 
-	platform->SetDeviceID(dev_id);
-	platform->SetRevId(dev_revision);
+	// platform->SetDeviceID(dev_id);
+	// platform->SetRevId(dev_revision);
 
 	// IGC::PlatformHelper::PopulateInterfaceWith(*platform, hw_info.platform);
 	// IGC::GtSysInfoHelper::PopulateInterfaceWith(*gt_system_info, hw_info.gtSystemInfo);

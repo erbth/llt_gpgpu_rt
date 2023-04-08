@@ -5,9 +5,17 @@
 
 #include "i915_runtime.h"
 #include "utils.h"
-#include "i915_memset.clch"
 
 using namespace std;
+
+const char* kernel_src = R"KERNELSRC(
+void __kernel cl_memset(uint size, uint val, __global uint* dst)
+{
+	uint i = get_global_id(0);
+	if (i < size)
+		dst[i] = val;
+}
+)KERNELSRC";
 
 
 int main(int argc, char** argv)
@@ -15,7 +23,13 @@ int main(int argc, char** argv)
 	try
 	{
 		auto rte = OCL::create_i915_rte("/dev/dri/card0");
-		auto kernel = rte->read_compiled_kernel(CompiledGPUProgramsI915::i915_memset(), "cl_memset");
+
+		auto kernel = rte->compile_kernel(kernel_src, "cl_memset", "-cl-std=CL1.2");
+
+		auto build_log = kernel->get_build_log();
+		if (build_log.size() > 0)
+			printf("Build log:\n%s\n", build_log.c_str());
+
 
 		/* Allocate dummy memory */
 		AlignedBuffer buf(rte->get_page_size(), 1024ULL * 1024ULL * 1024ULL);

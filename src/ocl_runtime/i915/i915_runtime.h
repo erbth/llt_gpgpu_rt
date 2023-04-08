@@ -5,6 +5,7 @@
 #include <string>
 #include <memory>
 #include "../ocl_runtime.h"
+#include "i915_compiled_program.h"
 
 extern "C" {
 #include <xf86drm.h>
@@ -32,6 +33,10 @@ class I915RTE : public RTE
 {
 public:
 	virtual ~I915RTE() = 0;
+
+	/* For offline compiled kernels */
+	virtual std::shared_ptr<Kernel> read_compiled_kernel(
+			const I915CompiledProgram& program, const char* name) = 0;
 
 	virtual size_t get_page_size() = 0;
 	virtual drm_magic_t get_drm_magic() = 0;
