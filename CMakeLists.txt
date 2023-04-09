@@ -7,6 +7,9 @@ set(LLT_GPGPU_RT_VERSION_MAJOR 1)
 set(LLT_GPGPU_RT_VERSION_MINOR 0)
 set(LLT_GPGPU_RT_VERSION_PATCH 0)
 
+set(LLT_GPGPU_RT_VERSION
+	"${LLT_GPGPU_RT_VERSION_MAJOR}.${LLT_GPGPU_RT_VERSION_MINOR}.${LLT_GPGPU_RT_VERSION_PATCH}")
+
 # Options
 option(ENABLE_ONLINE_COMPILER "Enable online IGC compiler" OFF)
 
@@ -33,8 +36,45 @@ if (XCB_FOUND)
 	set(COMPILE_X_DEMOS TRUE)
 endif()
 
+# Include macros
+include("cmake/macros.cmake")
+
 # Configure a config file
 configure_file(llt_gpgpu_rt_config.h.in llt_gpgpu_rt_config.h)
 include_directories("${CMAKE_BINARY_DIR}")
 
+# Add /include to search path
+include_directories("${CMAKE_SOURCE_DIR}/include")
+
 add_subdirectory(src)
+
+# For installing public headers
+add_subdirectory(include)
+
+
+# Generate cmake config package
+include(CMakePackageConfigHelpers)
+write_basic_package_version_file(
+	"${CMAKE_CURRENT_BINARY_DIR}/LltGpgpuRtConfigVersion.cmake"
+	VERSION "${LLT_GPGPU_RT_VERSION}"
+	COMPATIBILITY SameMinorVersion)
+
+if (NOT ("${CMAKE_INSTALL_PREFIX}/include" IN_LIST CMAKE_CXX_IMPLICIT_INCLUDE_DIRECTORIES))
+	set(LLT_GPGPU_RT_INSTALLED_PACKAGE_INCLUDE_DIRS "${CMAKE_INSTALL_PREFIX}/include")
+else()
+	set(LLT_GPGPU_RT_INSTALLED_PACKAGE_INCLUDE_DIRS "")
+endif()
+
+set(LLT_GPGPU_RT_INSTALLED_PACKAGE_LIBRARIES "${CMAKE_INSTALL_PREFIX}/lib/libllt_gpgpu_rt_i915.a")
+if (ENABLE_ONLINE_COMPILER)
+	set(LLT_GPGPU_RT_INSTALLED_PACKAGE_LIBRARIES ${LLT_GPGPU_RT_INSTALLED_PACKAGE_LIBRARIES} -ldl)
+endif()
+
+configure_file(cmake/LltGpgpuRtConfig.cmake.in LltGpgpuRtConfig.cmake @ONLY)
+
+install(
+	FILES
+		"${CMAKE_CURRENT_BINARY_DIR}/LltGpgpuRtConfig.cmake"
+		"${CMAKE_CURRENT_BINARY_DIR}/LltGpgpuRtConfigVersion.cmake"
+	DESTINATION
+		lib/cmake/LltGpgpuRt/)

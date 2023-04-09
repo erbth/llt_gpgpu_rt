@@ -5,7 +5,7 @@
 #include <string>
 #include <memory>
 #include <vector>
-#include "i915_runtime.h"
+#include <llt_gpgpu_rt/i915_runtime.h>
 #include "igc_progbin.h"
 #include "i915_kernel_utils.h"
 

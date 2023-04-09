@@ -21,6 +21,7 @@
 #include "igc_progbin.h"
 #include "utils.h"
 #include "macros.h"
+#include "i915_device_translate.h"
 
 #include "llt_gpgpu_rt_config.h"
 
@@ -1477,7 +1478,7 @@ shared_ptr<Kernel> I915RTEImpl::compile_kernel(
 shared_ptr<Kernel> I915RTEImpl::read_compiled_kernel(
 		const I915CompiledProgram& program, const char* name)
 {
-	auto bin = program.get_bin(dev_info.platform);
+	auto bin = program.get_bin(intel_platform_to_device_type(dev_info.platform));
 	if (!bin)
 	{
 		throw runtime_error("This offline compiled kernel is not available for "

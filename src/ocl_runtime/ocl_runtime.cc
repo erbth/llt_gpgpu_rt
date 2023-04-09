@@ -1,4 +1,4 @@
-#include "ocl_runtime.h"
+#include <llt_gpgpu_rt/ocl_runtime.h>
 
 using namespace std;
 

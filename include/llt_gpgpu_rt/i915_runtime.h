@@ -1,11 +1,11 @@
 /** Heavily inspired by OpenCL */
-#ifndef __I915_RUNTIME_H
-#define __I915_RUNTIME_H
+#ifndef __LLT_GPGPU_RT_I915_RUNTIME_H
+#define __LLT_GPGPU_RT_I915_RUNTIME_H
 
 #include <string>
 #include <memory>
-#include "../ocl_runtime.h"
-#include "i915_compiled_program.h"
+#include <llt_gpgpu_rt/ocl_runtime.h>
+#include <llt_gpgpu_rt/i915_compiled_program.h>
 
 extern "C" {
 #include <xf86drm.h>
@@ -46,4 +46,4 @@ std::unique_ptr<I915RTE> create_i915_rte(const char* device);
 
 }
 
-#endif /* __I915_RUNTIME_H */
+#endif /* __LLT_GPGPU_RT_I915_RUNTIME_H */

@@ -1,10 +1,9 @@
-#ifndef __I915_COMPILED_PROGRAM_H
-#define __I915_COMPILED_PROGRAM_H
+#ifndef __LLT_GPGPU_RT_I915_COMPILED_PROGRAM_H
+#define __LLT_GPGPU_RT_I915_COMPILED_PROGRAM_H
 
 #include <utility>
 #include <optional>
-
-#include "third_party/mesa/intel_device_info.h"
+#include <llt_gpgpu_rt/i915_device.h>
 
 namespace OCL
 {
@@ -16,9 +15,9 @@ public:
 	virtual ~I915CompiledProgram() = 0;
 
 	virtual std::optional<std::pair<const char*, size_t>>
-		get_bin(enum intel_platform platform) const = 0;
+		get_bin(i915_device_type device_type) const = 0;
 };
 
 }
 
-#endif /* __I915_COMPILED_PROGRAM_H */
+#endif /* __LLT_GPGPU_RT_I915_COMPILED_PROGRAM_H */

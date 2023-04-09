@@ -12,7 +12,7 @@ extern "C" {
 #include <xcb/dri2.h>
 }
 
-#include "i915_runtime.h"
+#include <llt_gpgpu_rt/i915_runtime.h>
 #include "utils.h"
 #include "i915_xcb_display.clch"
 

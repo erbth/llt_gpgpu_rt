@@ -1,6 +1,6 @@
 /** Heavily inspired by OpenCL */
-#ifndef __OCL_RUNTIME_H
-#define __OCL_RUNTIME_H
+#ifndef __LLT_GPGPU_RT_OCL_RUNTIME_H
+#define __LLT_GPGPU_RT_OCL_RUNTIME_H
 
 #include <cstdint>
 #include <memory>
@@ -57,4 +57,4 @@ public:
 
 }
 
-#endif /* __OCL_RUNTIME_H */
+#endif /* __LLT_GPGPU_RT_OCL_RUNTIME_H */

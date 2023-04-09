@@ -3,7 +3,7 @@
 #include <cstring>
 #include <exception>
 
-#include "i915_runtime.h"
+#include <llt_gpgpu_rt/i915_runtime.h>
 #include "utils.h"
 
 using namespace std;

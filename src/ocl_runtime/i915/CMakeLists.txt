@@ -4,6 +4,7 @@ set(OCL_RUNTIME_I915_SRC
 	i915_utils.cc
 	i915_kernel_utils.cc
 	i915_compiled_program.cc
+	i915_device_translate.cc
 	igc_progbin.cc
 	hash.cc
 	utils.cc
@@ -29,16 +30,16 @@ if (ENABLE_ONLINE_COMPILER)
 endif()
 
 
-add_library(ocl_runtime_i915 ${OCL_RUNTIME_I915_SRC})
+add_library(llt_gpgpu_rt_i915 ${OCL_RUNTIME_I915_SRC})
 
-target_include_directories(ocl_runtime_i915
+target_include_directories(llt_gpgpu_rt_i915
 	PRIVATE
 		${OCL_RUNTIME_I915_REQ_INCLUDE_DIRS}
 	PUBLIC
 		${LIBDRM_INCLUDE_DIRS}
 		"${CMAKE_CURRENT_SOURCE_DIR}")
 
-target_link_libraries(ocl_runtime_i915 PRIVATE ${OCL_RUNTIME_I915_REQ_LIBRARIES})
+target_link_libraries(llt_gpgpu_rt_i915 PRIVATE ${OCL_RUNTIME_I915_REQ_LIBRARIES})
 
 
 # Generate hw interface header files from XML files
@@ -67,8 +68,12 @@ foreach(XML_FILE ${XML_FILES})
 		COMMAND "${CMD}" "${XML_HDR_INPUT}" "${XML_HDR_OUTPUT}"
 		DEPENDS "${XML_HDR_INPUT}" "${CMD}")
 
-	target_sources(ocl_runtime_i915 PRIVATE "${XML_HDR_OUTPUT}")
+	target_sources(llt_gpgpu_rt_i915 PRIVATE "${XML_HDR_OUTPUT}")
 endforeach()
+
+
+# Install library
+install(TARGETS llt_gpgpu_rt_i915 DESTINATION lib)
 
 
 add_subdirectory(compiler)

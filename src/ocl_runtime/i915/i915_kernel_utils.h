@@ -5,7 +5,7 @@
 #include <memory>
 #include <vector>
 #include <tuple>
-#include "../ocl_runtime.h"
+#include <llt_gpgpu_rt/ocl_runtime.h>
 #include "igc_progbin.h"
 
 namespace OCL {
