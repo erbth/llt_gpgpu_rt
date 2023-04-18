@@ -292,7 +292,7 @@ void I915PreparedKernelImpl::execute(NDRange global_size, NDRange local_size)
 
 	idesc.set_rounding_mode(idesc_kernel.get_rounding_mode());
 	// bool kernel_barrier_enable = idesc_kernel.get_barrier_enable();
-	uint32_t kernel_slm_size = slm_size_from_idesc(idesc_kernel.get_shared_local_memory_size());
+	// uint32_t kernel_slm_size = slm_size_from_idesc(idesc_kernel.get_shared_local_memory_size());
 	// printf("barrier enable: %s, SLM size: %d\n",
 	// 		(kernel_barrier_enable ? "yes" : "no"),
 	// 		(int) kernel_slm_size);
@@ -560,12 +560,6 @@ void I915PreparedKernelImpl::execute(NDRange global_size, NDRange local_size)
 	{
 		throw invalid_argument("Kernel has an attributes info param but that "
 				"is not supported yet");
-	}
-
-	if (kernel->params.allocate_local_surface)
-	{
-		throw invalid_argument("Kernel requires a local surface but that is not"
-				"supported yet");
 	}
 
 
@@ -850,11 +844,57 @@ void I915PreparedKernelImpl::execute(NDRange global_size, NDRange local_size)
 
 
 	/* Allocate SLM */
-	if (kernel_slm_size > 0)
-		throw invalid_argument("Kernel uses SLM but SLM is not supported yet");
-
 	uint32_t slm_size = 0;
+
+	if (kernel->params.allocate_local_surface)
+	{
+		auto& als = *kernel->params.allocate_local_surface;
+		if (als.offset != 0)
+			throw invalid_argument("allocate_local_surface.offset != 0");
+
+		if (als.total_inline_local_memory_size > 0)
+		{
+			/* Round up to next power of two */
+			unsigned slm_req = 1024;
+			while (slm_req < als.total_inline_local_memory_size)
+			{
+				if (slm_req >= 65536)
+					throw invalid_argument("requested SLM size > 64kiB");
+
+				slm_req *= 2;
+			}
+
+			slm_size = slm_req;
+		}
+	}
+
+	// printf("SLM size: %d\n", (int) slm_size);
 	idesc.set_shared_local_memory_size(slm_size_to_idesc(slm_size));
+
+	/* Allocate L3 */
+	/* NOTE: l3_* numbers must be multiples of two */
+	int l3_slm = slm_size > 0 ? 64 : 0;
+	int l3_urb = 64;
+	int l3_cache = 192 - l3_slm - l3_urb;
+
+	if (l3_cache < 0)
+		throw runtime_error("Not enough L3 memory");
+
+	if (l3_cache > 0x40 * 2)
+		l3_cache = 0x40 * 2;
+
+	// printf("L3 allocation: SLM: %d, URB: %d, cache: %d\n", l3_slm, l3_urb, l3_cache);
+
+	int urb_allocation_size = 1922;
+	if (
+			(urb_allocation_size +
+			cross_thread_size_bytes + per_thread_size_bytes * cnt_threads +
+			64)
+				<
+			(size_t) l3_urb * 1024 / 32)
+	{
+		throw runtime_error("Not enough L3 memory for URB");
+	}
 
 
 	/* Copy kernel code */
@@ -956,6 +996,10 @@ void I915PreparedKernelImpl::execute(NDRange global_size, NDRange local_size)
 	{
 		auto cmd = make_unique<Gen9::CmdPipeControl>();
 		cmd->command_streamer_stall_enable = true;
+		cmd->texture_cache_invalidation_enable = true;
+		cmd->constant_cache_invalidation_enable = true;
+		cmd->state_cache_invalidation_enable = true;
+		cmd->instruction_cache_invalidate_enable = true;
 		cmd->render_target_cache_flush_enable = true;
 		cmd->dc_flush_enable = true;
 		cmd->depth_cache_flush_enable = true;
@@ -965,10 +1009,9 @@ void I915PreparedKernelImpl::execute(NDRange global_size, NDRange local_size)
 	{
 		auto cmd = make_unique<Gen9::CmdPipeControl>();
 		cmd->command_streamer_stall_enable = true;
-		cmd->texture_cache_invalidation_enable = true;
-		cmd->constant_cache_invalidation_enable = true;
-		cmd->state_cache_invalidation_enable = true;
-		cmd->instruction_cache_invalidate_enable = true;
+		cmd->render_target_cache_flush_enable = true;
+		cmd->dc_flush_enable = true;
+		cmd->depth_cache_flush_enable = true;
 		cmds.push_back(move(cmd));
 	}
 
@@ -982,11 +1025,11 @@ void I915PreparedKernelImpl::execute(NDRange global_size, NDRange local_size)
 
 	{
 		Gen9::REG_L3CNTLREG reg;
-		reg.set_slm_enable(true);
 
-		/* TODO: Don't use fixed values here */
-		reg.set_urb_allocation(0x10);
-		reg.set_all_allocation(0x30);
+		reg.set_slm_enable(l3_slm > 0);
+
+		reg.set_urb_allocation(l3_urb / 2);
+		reg.set_all_allocation(l3_cache / 2);
 
 		auto cmd = make_unique<Gen9::CmdMiLoadRegisterImm>();
 		cmd->register_offset = reg.address >> 2;
@@ -1004,14 +1047,13 @@ void I915PreparedKernelImpl::execute(NDRange global_size, NDRange local_size)
 	}
 
 	{
-		/* TODO: Don't use fixed values here */
 		auto cmd = make_unique<Gen9::CmdMediaVfeState>();
 		cmd->scratch_space_base_pointer = 0x0;
 		cmd->stack_size = 0;
 		cmd->per_thread_scratch_space = 0;
 		cmd->maximum_number_of_threads = rte.dev_info.max_cs_threads - 1;
 		cmd->number_of_urb_entries = 1;
-		cmd->urb_entry_allocation_size = 1922;
+		cmd->urb_entry_allocation_size = urb_allocation_size;
 		cmds.push_back(move(cmd));
 	}
 
