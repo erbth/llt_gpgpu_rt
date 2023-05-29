@@ -267,6 +267,7 @@ void gem_execbuffer2(int fd, uint32_t ctx_id,
 	catch (...)
 	{
 		delete[] objs;
+		throw;
 	}
 }
 
