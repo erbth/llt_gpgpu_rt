@@ -282,7 +282,6 @@ protected:
 	int height = 2160;
 	bool closed = false;
 
-	string dri2_driver_name;
 	string dri2_device_name;
 	bool drm_connected = false;
 
@@ -375,15 +374,9 @@ public:
 					throw runtime_error("Failed to connect to DRM device");
 
 				FINALLY({
-					dri2_driver_name = string(xcb_dri2_connect_driver_name(rep),
-							xcb_dri2_connect_driver_name_length(rep));
-
 					dri2_device_name = string(xcb_dri2_connect_device_name(rep),
 							xcb_dri2_connect_device_name_length(rep));
 				}, free(rep));
-
-				if (dri2_driver_name != "i965")
-					throw runtime_error("Unsupported DRI2 driver");
 			}
 
 			xcb.add_window(wid,
