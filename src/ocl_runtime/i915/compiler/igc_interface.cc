@@ -155,16 +155,13 @@ IGCInterface::IGCInterface(PRODUCT_FAMILY product_family,
 
 	if (fcl_device_ctx->GetUnderlyingVersion() > 4u)
 	{
-#if 0
 		auto fcl_platform = fcl_device_ctx->GetPlatformHandle();
 		if (!fcl_platform)
 			throw runtime_error("Failed to set platform for FCL");
 
-		IGC::PlatformHelper::PopulateInterfaceWith(
-				fcl_platform, (const HardwareInfo&) hw_info.platform);
-#else
-		throw runtime_error("FCL too new");
-#endif
+		/* NOTE: This is probably incomplete */
+		fcl_platform->SetProductFamily(product_family);
+		fcl_platform->SetRenderCoreFamily(render_core_family);
 	}
 
 

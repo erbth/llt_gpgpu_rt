@@ -9,9 +9,10 @@
 #include <igfxfmid.h>
 #include <ocl_igc_shared/executable_format/patch_list.h>
 #include <ocl_igc_shared/executable_format/patch_g7.h>
-#include <ocl_igc_shared/executable_format/patch_g75.h>
 #include <ocl_igc_shared/executable_format/patch_g8.h>
 #include <ocl_igc_shared/executable_format/patch_g9.h>
+
+static_assert(iOpenCL::CURRENT_ICBE_VERSION == 1081, "unsupported IGC version");
 
 namespace OCL {
 
@@ -120,6 +121,11 @@ struct KernelParameters final
 		uint32_t offset_to_skip_per_thread_data_load = 0;
 		uint32_t offset_to_skip_set_ffidgp = 0;
 		uint32_t pass_inline_data = 0;
+		uint32_t rt_stack_id_present = 0;
+		uint32_t generate_local_id = 0;
+		uint32_t emit_local_mask = 0;
+		uint32_t walk_order = 0;
+		uint32_t tile_y = 0;
 	};
 	std::optional<ThreadPayload> thread_payload;
 
@@ -148,12 +154,15 @@ struct KernelParameters final
 		uint32_t num_grf_required = 0;
 		uint32_t workgroup_walk_order_dims = 0;
 		uint32_t has_global_atomics = 0;
-		uint32_t reserved1 = 0;
-		uint32_t reserved2 = 0;
-		uint32_t reserved3 = 0;
+		uint32_t has_dpas = 0;
+		uint32_t has_rt_calls = 0;
+		uint32_t num_threads_required = 0;
 		uint32_t stateless_writes_count = 0;
+		uint32_t indirect_stateless_count = 0;
 		uint32_t use_bindless_mode = 0;
-		uint32_t simd_info = 0;
+		uint32_t has_stack_calls = 0;
+		uint64_t simd_info = 0;
+		uint32_t require_disable_eu_fusion = 0;
 	};
 	std::optional<ExecutionEnvironment> execution_environment;
 

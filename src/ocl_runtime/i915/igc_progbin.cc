@@ -331,8 +331,8 @@ void read_kernel_patchlist(
 
 		case iOpenCL::PATCH_TOKEN_THREAD_PAYLOAD:
 			{
-				static_assert(sizeof(iOpenCL::SPatchThreadPayload) == 8 + 15*4);
-				if (item_size != 8 + 15*4 || params.thread_payload)
+				static_assert(sizeof(iOpenCL::SPatchThreadPayload) == 8 + 20*4);
+				if (item_size != 8 + 20*4 || params.thread_payload)
 					throw invalid_argument("Failed to read patch item ThreadPayload");
 
 				params.thread_payload.emplace();
@@ -351,13 +351,18 @@ void read_kernel_patchlist(
 				params.thread_payload->offset_to_skip_per_thread_data_load = read_binary<uint32_t>(bin);
 				params.thread_payload->offset_to_skip_set_ffidgp = read_binary<uint32_t>(bin);
 				params.thread_payload->pass_inline_data = read_binary<uint32_t>(bin);
+				params.thread_payload->rt_stack_id_present = read_binary<uint32_t>(bin);
+				params.thread_payload->generate_local_id = read_binary<uint32_t>(bin);
+				params.thread_payload->emit_local_mask = read_binary<uint32_t>(bin);
+				params.thread_payload->walk_order = read_binary<uint32_t>(bin);
+				params.thread_payload->tile_y = read_binary<uint32_t>(bin);
 			}
 			break;
 
 		case iOpenCL::PATCH_TOKEN_EXECUTION_ENVIRONMENT:
 			{
-				static_assert(sizeof(iOpenCL::SPatchExecutionEnvironment) == 8 + 28*4 + 1*8);
-				if (item_size != 8 + 28*4 + 1*8 || params.execution_environment)
+				static_assert(sizeof(iOpenCL::SPatchExecutionEnvironment) == 8 + 31*4 + 1*8);
+				if (item_size != 8 + 31*4 + 1*8 || params.execution_environment)
 					throw invalid_argument("Failed to read patch item ExecutionEnvironment");
 
 				params.execution_environment.emplace();
@@ -386,12 +391,15 @@ void read_kernel_patchlist(
 				params.execution_environment->num_grf_required = read_binary<uint32_t>(bin);
 				params.execution_environment->workgroup_walk_order_dims = read_binary<uint32_t>(bin);
 				params.execution_environment->has_global_atomics = read_binary<uint32_t>(bin);
-				params.execution_environment->reserved1 = read_binary<uint32_t>(bin);
-				params.execution_environment->reserved2 = read_binary<uint32_t>(bin);
-				params.execution_environment->reserved3 = read_binary<uint32_t>(bin);
+				params.execution_environment->has_dpas = read_binary<uint32_t>(bin);
+				params.execution_environment->has_rt_calls = read_binary<uint32_t>(bin);
+				params.execution_environment->num_threads_required = read_binary<uint32_t>(bin);
 				params.execution_environment->stateless_writes_count = read_binary<uint32_t>(bin);
+				params.execution_environment->indirect_stateless_count = read_binary<uint32_t>(bin);
 				params.execution_environment->use_bindless_mode = read_binary<uint32_t>(bin);
+				params.execution_environment->has_stack_calls = read_binary<uint32_t>(bin);
 				params.execution_environment->simd_info = read_binary<uint64_t>(bin);
+				params.execution_environment->require_disable_eu_fusion = read_binary<uint32_t>(bin);
 			}
 			break;
 
