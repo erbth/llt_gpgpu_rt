@@ -49,4 +49,19 @@ target_link_libraries(i915_xcb_display PRIVATE
 	llt_gpgpu_rt_i915
 	${XCB_LIBRARIES})
 
+
+llt_gpgpu_compile_i915(i915_xcb_gradients.clch i915_xcb_gradients.cl)
+add_executable(i915_xcb_gradients
+	i915_xcb_gradients.cc
+	i915_xcb_gradients.clch)
+
+target_include_directories(i915_xcb_gradients PRIVATE
+	llt_gpgpu_rt_i915
+	${XCB_INCLUDE_DIRS}
+	${CMAKE_CURRENT_BINARY_DIR})
+
+target_link_libraries(i915_xcb_gradients PRIVATE
+	llt_gpgpu_rt_i915
+	${XCB_LIBRARIES})
+
 endif()
